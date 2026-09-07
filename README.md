@@ -223,6 +223,17 @@ The real data-entry path — the Lovable frontend calling `update_check_item`
 in `api.py` — does its own independent server-side stamping (see §8) and
 does not rely on this script at all.
 
+The same file also covers a second Desk-only gap: `sr_no`,
+`check_description`, `category`, and `standard` on `Shift Checklist Item`
+are read-only `fetch_from` fields sourced from a hidden `template_item`
+link, which the daily scheduler sets on every row it creates. A Shift
+Checklist created manually in Desk starts with zero rows and no way to
+set that hidden link itself, so those fields would otherwise be
+permanently unreachable. Selecting a `Checklist Template` on the parent
+form (or clicking the **Get Items From Template** button it adds) calls
+the whitelisted `get_template_items` function in `shift_checklist.py`
+and populates the items table client-side — no save required first.
+
 ---
 
 ## 8. Whitelisted API (`retail_sop/api.py`)

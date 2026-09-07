@@ -208,3 +208,27 @@ class ShiftChecklist(Document):
 		if not row.template_item:
 			return None
 		return frappe.get_cached_doc("Checklist Template Item", row.template_item)
+
+
+@frappe.whitelist()
+def get_template_items(checklist_template):
+	"""Desk UI convenience: return a Checklist Template's item rows so the
+	client script can populate a Shift Checklist's items table without
+	saving first (see public/js/shift_checklist.js).
+
+	The normal creation path is the daily scheduler (tasks.py), which sets
+	`template_item` on each row itself as it builds the document
+	server-side. This exists for the manual-creation path in Desk, where
+	sr_no/check_description/category/standard are otherwise unreachable -
+	they're read-only fetch_from fields with nothing to fetch from until a
+	row's template_item is set to something.
+	"""
+	if not checklist_template:
+		frappe.throw(_("checklist_template is required."))
+
+	return frappe.get_all(
+		"Checklist Template Item",
+		filters={"parent": checklist_template, "parenttype": "Checklist Template"},
+		fields=["name", "sr_no", "check_description", "category", "standard"],
+		order_by="idx",
+	)
