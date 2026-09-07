@@ -1,16 +1,19 @@
 [
  {
   "doctype": "Workflow State",
+  "name": "Draft",
   "workflow_state_name": "Draft",
   "style": "Warning"
  },
  {
   "doctype": "Workflow State",
+  "name": "Submitted",
   "workflow_state_name": "Submitted",
   "style": "Info"
  },
  {
   "doctype": "Workflow State",
+  "name": "Verified",
   "workflow_state_name": "Verified",
   "style": "Success"
  }

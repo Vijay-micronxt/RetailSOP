@@ -1,10 +1,12 @@
 [
  {
   "doctype": "Workflow Action Master",
+  "name": "Submit",
   "workflow_action_name": "Submit"
  },
  {
   "doctype": "Workflow Action Master",
+  "name": "Verify",
   "workflow_action_name": "Verify"
  }
 ]
