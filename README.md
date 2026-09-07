@@ -69,11 +69,12 @@ retail_sop/
 ├── fixtures/                # Role, Workflow, Workflow State/Action, Notification
 ├── patches/v0_0/             # seed data patch (demo checklist template)
 └── retail_sop/
-    └── doctype/
-        ├── outlet/
-        ├── checklist_template/            (+ checklist_template_item, child table)
-        ├── shift_checklist/               (+ shift_checklist_item, child table)
-        └── checklist_deviation/
+    ├── doctype/
+    │   ├── outlet/
+    │   ├── checklist_template/            (+ checklist_template_item, child table)
+    │   ├── shift_checklist/               (+ shift_checklist_item, child table)
+    │   └── checklist_deviation/
+    └── workspace/retail_sop/retail_sop.json   # home screen menu (see §11)
 ```
 
 ---
@@ -295,6 +296,37 @@ worth confirming against real requirements:
   enforced even if a fixture field needs a small correction.
 - The 12-item demo checklist in the seed patch is a **placeholder** —
   swap in the real reference list.
+- **Workspace content-block schema** (§11) was hand-written from
+  framework knowledge without a live bench to verify against — same
+  caveat as the Workflow/Notification fixtures, but lower risk: a
+  malformed `content` block degrades to a blank/plain page rather than
+  breaking install, and the underlying `links`/`shortcuts` data is
+  still there to rebuild from inside the block editor if needed.
+
+---
+
+## 11. Home screen (Workspace)
+
+A **Retail SOP** entry appears in the Desk sidebar/home screen
+automatically after install — no manual setup. It's defined at
+[`retail_sop/retail_sop/workspace/retail_sop/retail_sop.json`](retail_sop/retail_sop/workspace/retail_sop/retail_sop.json),
+which uses Frappe's standard module-sync mechanism (the same one that
+syncs doctypes, reports, and pages): any `<module>/workspace/<name>/<name>.json`
+file is picked up automatically by `bench migrate` — it is **not** part
+of the generic `fixtures` list in `hooks.py`.
+
+It's a public workspace (visible to anyone who can open at least one of
+the linked doctypes) with:
+- Four **shortcuts** at the top: Shift Checklist, Checklist Deviation,
+  Checklist Template, Outlet.
+- Two **card** groupings below: "Operations" (Shift Checklist, Checklist
+  Deviation) and "Configuration" (Checklist Template, Outlet).
+
+If the workspace ever renders blank or oddly laid out on a given Frappe
+version (content-block schemas have shifted across versions — see the
+caveat in §10), the underlying `links`/`shortcuts` data that feeds it is
+still correct; open **Retail SOP → Edit** in Desk and rebuild the visual
+layout from those — no data re-entry needed, just a 2-minute drag/drop.
 
 ---
 
