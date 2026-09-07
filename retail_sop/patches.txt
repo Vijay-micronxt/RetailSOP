@@ -1,0 +1,1 @@
+retail_sop.patches.v0_0.seed_demo_checklist_template

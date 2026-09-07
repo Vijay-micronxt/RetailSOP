@@ -1,0 +1,17 @@
+include MANIFEST.in
+include *.json
+include *.md
+include *.py
+include *.txt
+recursive-include retail_sop *.css
+recursive-include retail_sop *.csv
+recursive-include retail_sop *.html
+recursive-include retail_sop *.ico
+recursive-include retail_sop *.js
+recursive-include retail_sop *.json
+recursive-include retail_sop *.md
+recursive-include retail_sop *.png
+recursive-include retail_sop *.py
+recursive-include retail_sop *.svg
+recursive-include retail_sop *.txt
+recursive-exclude retail_sop *.pyc

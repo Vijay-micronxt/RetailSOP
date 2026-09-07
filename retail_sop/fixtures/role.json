@@ -1,0 +1,14 @@
+[
+ {
+  "doctype": "Role",
+  "role_name": "Food Court Supervisor",
+  "desk_access": 1,
+  "disabled": 0
+ },
+ {
+  "doctype": "Role",
+  "role_name": "Food Court Manager",
+  "desk_access": 1,
+  "disabled": 0
+ }
+]

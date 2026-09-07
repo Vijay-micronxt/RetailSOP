@@ -1,0 +1,43 @@
+[
+ {
+  "doctype": "Workflow",
+  "workflow_name": "Shift Checklist Workflow",
+  "document_type": "Shift Checklist",
+  "workflow_state_field": "workflow_state",
+  "is_active": 1,
+  "send_email_alert": 0,
+  "states": [
+   {
+    "state": "Draft",
+    "doc_status": "0",
+    "allow_edit": "Food Court Supervisor"
+   },
+   {
+    "state": "Submitted",
+    "doc_status": "1",
+    "allow_edit": "Food Court Manager"
+   },
+   {
+    "state": "Verified",
+    "doc_status": "1",
+    "allow_edit": "Food Court Manager"
+   }
+  ],
+  "transitions": [
+   {
+    "state": "Draft",
+    "action": "Submit",
+    "next_state": "Submitted",
+    "allowed": "Food Court Supervisor",
+    "allow_self_approval": 1
+   },
+   {
+    "state": "Submitted",
+    "action": "Verify",
+    "next_state": "Verified",
+    "allowed": "Food Court Manager",
+    "allow_self_approval": 1
+   }
+  ]
+ }
+]

@@ -1,0 +1,128 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "template_item",
+  "sr_no",
+  "check_description",
+  "category",
+  "standard",
+  "section_break_status",
+  "status",
+  "reading",
+  "vendor",
+  "column_break_meta",
+  "checked_at",
+  "checked_by",
+  "remarks",
+  "attachment"
+ ],
+ "fields": [
+  {
+   "fieldname": "template_item",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Template Item",
+   "options": "Checklist Template Item",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "template_item.sr_no",
+   "fieldname": "sr_no",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Sr No",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "template_item.check_description",
+   "fieldname": "check_description",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Check Description",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "template_item.category",
+   "fieldname": "category",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Category",
+   "options": "Common Area\nHygiene\nVendor Compliance\nRevenue\nSafety",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "template_item.standard",
+   "fieldname": "standard",
+   "fieldtype": "Data",
+   "label": "Standard / Reference Value",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_status",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "\nOK\nNot OK\nNA"
+  },
+  {
+   "fieldname": "reading",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Reading"
+  },
+  {
+   "fieldname": "vendor",
+   "fieldtype": "Link",
+   "label": "Vendor",
+   "options": "Customer"
+  },
+  {
+   "fieldname": "column_break_meta",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "checked_at",
+   "fieldtype": "Datetime",
+   "label": "Checked At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "checked_by",
+   "fieldtype": "Link",
+   "label": "Checked By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  },
+  {
+   "fieldname": "attachment",
+   "fieldtype": "Attach Image",
+   "label": "Attachment"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Retail SOP",
+ "name": "Shift Checklist Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

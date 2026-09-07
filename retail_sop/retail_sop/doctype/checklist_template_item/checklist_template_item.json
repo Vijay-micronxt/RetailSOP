@@ -1,0 +1,135 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "sr_no",
+  "check_description",
+  "category",
+  "input_type",
+  "standard",
+  "column_break_ranges",
+  "min_value",
+  "max_value",
+  "section_break_flags",
+  "is_mandatory",
+  "requires_photo",
+  "escalate_on_fail",
+  "vendor_specific",
+  "column_break_escalation",
+  "escalate_to_type",
+  "escalate_to"
+ ],
+ "fields": [
+  {
+   "fieldname": "sr_no",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Sr No"
+  },
+  {
+   "fieldname": "check_description",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Check Description",
+   "reqd": 1
+  },
+  {
+   "fieldname": "category",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Category",
+   "options": "Common Area\nHygiene\nVendor Compliance\nRevenue\nSafety"
+  },
+  {
+   "fieldname": "input_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Input Type",
+   "options": "Tick\nNumeric\nText\nPhoto"
+  },
+  {
+   "fieldname": "standard",
+   "fieldtype": "Data",
+   "label": "Standard / Reference Value"
+  },
+  {
+   "fieldname": "column_break_ranges",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.input_type=='Numeric'",
+   "fieldname": "min_value",
+   "fieldtype": "Float",
+   "label": "Min Value"
+  },
+  {
+   "depends_on": "eval:doc.input_type=='Numeric'",
+   "fieldname": "max_value",
+   "fieldtype": "Float",
+   "label": "Max Value"
+  },
+  {
+   "fieldname": "section_break_flags",
+   "fieldtype": "Section Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "is_mandatory",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Is Mandatory"
+  },
+  {
+   "fieldname": "requires_photo",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Requires Photo"
+  },
+  {
+   "fieldname": "escalate_on_fail",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Escalate on Fail"
+  },
+  {
+   "fieldname": "vendor_specific",
+   "fieldtype": "Check",
+   "label": "Vendor Specific"
+  },
+  {
+   "fieldname": "column_break_escalation",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Role",
+   "depends_on": "eval:doc.escalate_on_fail",
+   "fieldname": "escalate_to_type",
+   "fieldtype": "Select",
+   "label": "Escalate To Type",
+   "options": "User\nRole"
+  },
+  {
+   "depends_on": "eval:doc.escalate_on_fail",
+   "fieldname": "escalate_to",
+   "fieldtype": "Dynamic Link",
+   "label": "Escalate To",
+   "options": "escalate_to_type"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Retail SOP",
+ "name": "Checklist Template Item",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -1,0 +1,19 @@
+[
+ {
+  "doctype": "Notification",
+  "name": "Critical Checklist Deviation Alert",
+  "subject": "Critical Deviation Raised: {{ doc.name }}",
+  "document_type": "Checklist Deviation",
+  "event": "New",
+  "channel": "Email",
+  "enabled": 1,
+  "send_system_notification": 1,
+  "condition": "doc.severity == \"Critical\"",
+  "message": "<p>A Critical severity deviation has been raised.</p><p><b>Outlet:</b> {{ doc.outlet or \"\" }}<br><b>Category:</b> {{ doc.category or \"\" }}<br><b>Issue:</b> {{ doc.issue or \"\" }}<br><b>Shift Checklist:</b> {{ doc.shift_checklist or \"\" }}</p>",
+  "recipients": [
+   {
+    "receiver_by_role": "Food Court Manager"
+   }
+  ]
+ }
+]

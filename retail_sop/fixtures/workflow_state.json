@@ -1,0 +1,17 @@
+[
+ {
+  "doctype": "Workflow State",
+  "workflow_state_name": "Draft",
+  "style": "Warning"
+ },
+ {
+  "doctype": "Workflow State",
+  "workflow_state_name": "Submitted",
+  "style": "Info"
+ },
+ {
+  "doctype": "Workflow State",
+  "workflow_state_name": "Verified",
+  "style": "Success"
+ }
+]
