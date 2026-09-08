@@ -7,7 +7,9 @@ description = "Multi-outlet food court SOP & compliance checklist system"
 requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
-dependencies = []
+dependencies = [
+    "PyJWT~=2.8.0",
+]
 
 [build-system]
 requires = ["flit_core>=3.4,<4"]

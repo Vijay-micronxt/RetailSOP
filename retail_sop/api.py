@@ -23,10 +23,14 @@ this module is what the fetch() calls swap in for it). Method name mapping:
     createDeviation(input)           create_deviation(...)
     updateDeviationStatus(name, s)   update_deviation_status(name, resolution_status)
 
-Auth: assumes Frappe's built-in API key/secret (token) authentication,
-enforced by the framework before a request reaches these handlers.
-`_check_auth` is kept as a single choke point so the strategy can be
-swapped later without touching every method.
+Auth: the frontend authenticates via the JWT bearer-token flow in
+retail_sop/auth/ (login/refresh/logout - see its module docstrings and
+README §12), not Frappe's cookie-session login. retail_sop.auth.middleware
+runs before every request and, given a valid Authorization header, calls
+frappe.set_user() so frappe.session.user below is already the real user
+by the time these handlers run. `_check_auth` is kept as a single choke
+point regardless, both as a defensive check and so the strategy could be
+swapped again later without touching every method.
 
 All responses are plain dict/list JSON - no Frappe Document objects or
 internal metadata are returned directly.

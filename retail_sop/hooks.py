@@ -51,3 +51,16 @@ scheduler_events = {
 		"retail_sop.tasks.create_daily_shift_checklists",
 	],
 }
+
+# JWT bearer-token auth bypass
+# ----------------------------
+# Runs on every request. If a valid `Authorization: Bearer <access_token>`
+# header is present, this makes the request run as that real Frappe user
+# with no `sid` cookie/CSRF involved at all - see retail_sop/auth/ for the
+# whole flow (login/refresh/logout endpoints, JWT signing, this hook).
+# Requires `retail_sop_jwt_keys` / `retail_sop_jwt_active_kid` to be set in
+# site_config.json (see retail_sop/auth/jwt_utils.py) before login() will
+# work; the hook itself fails safe (falls through to Guest) if they're not.
+before_request = [
+	"retail_sop.auth.middleware.authenticate_request",
+]

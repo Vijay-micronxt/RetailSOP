@@ -62,9 +62,14 @@ without digging through paper checklists.
 
 ```
 retail_sop/
-├── hooks.py                 # app config: scheduler_events, fixtures, doctype_js
+├── hooks.py                 # app config: scheduler_events, fixtures, doctype_js, before_request
 ├── tasks.py                 # daily scheduler job
 ├── api.py                   # whitelisted REST API (the frontend's only entry point)
+├── auth/                    # JWT bearer-token auth (see §12) - login/refresh/logout/me,
+│   ├── api.py                #   JWT signing, the before_request bypass middleware
+│   ├── jwt_utils.py
+│   ├── middleware.py
+│   └── utils.py
 ├── public/js/shift_checklist.js   # desk-only client script
 ├── fixtures/                # Role, Workflow, Workflow State/Action, Notification
 ├── patches/v0_0/             # seed data patch (demo checklist template)
@@ -73,7 +78,8 @@ retail_sop/
     │   ├── outlet/
     │   ├── checklist_template/            (+ checklist_template_item, child table)
     │   ├── shift_checklist/               (+ shift_checklist_item, child table)
-    │   └── checklist_deviation/
+    │   ├── checklist_deviation/
+    │   └── auth_session/                  # one row per logged-in device/session (see §12)
     └── workspace/retail_sop/retail_sop.json   # home screen menu (see §11)
 ```
 
@@ -327,8 +333,13 @@ After install, `bench --site your-site backup` then verify:
 - A demo template **Pre-Opening Demo** exists (Retail SOP → Checklist
   Template) with a placeholder 12-check list — replace with the real
   reference checklist.
-- Generate API keys for supervisor/manager users (User → API Access) for
-  the frontend to authenticate with.
+- Add JWT signing keys to `site_config.json` (see §12) — **the frontend
+  cannot log in until this is done**:
+  ```bash
+  bench --site your-site set-config retail_sop_jwt_keys '{"2026-01": "<random 32+ byte secret>"}' --parse
+  bench --site your-site set-config retail_sop_jwt_active_kid "2026-01"
+  ```
+  Generate the secret with e.g. `openssl rand -base64 48`.
 
 ---
 
@@ -358,6 +369,14 @@ worth confirming against real requirements:
   enforced even if a fixture field needs a small correction.
 - The 12-item demo checklist in the seed patch is a **placeholder** —
   swap in the real reference list.
+- **JWT `ALLOWED_ROLES` gate** (`auth/api.py`) is currently Food Court
+  Supervisor + Food Court Manager + System Manager — adjust if other
+  roles should be able to log in through this API.
+- **Refresh token sliding expiration**: each successful `refresh_token`
+  call resets `expires_at` to a fresh 30-day window rather than counting
+  down from original login — a device in regular use effectively never
+  needs to re-enter credentials. Flagging in case a hard expiration from
+  login time is wanted instead.
 - **Workspace content-block schema** (§11) was hand-written from
   framework knowledge without a live bench to verify against — same
   caveat as the Workflow/Notification fixtures, but lower risk: a
@@ -389,6 +408,139 @@ version (content-block schemas have shifted across versions — see the
 caveat in §10), the underlying `links`/`shortcuts` data that feeds it is
 still correct; open **Retail SOP → Edit** in Desk and rebuild the visual
 layout from those — no data re-entry needed, just a 2-minute drag/drop.
+
+---
+
+## 12. Authentication (JWT bearer tokens)
+
+The app-facing API (§8) authenticates via a self-contained JWT
+bearer-token flow, not Frappe's cookie-session login (`/api/method/login`,
+`sid` cookie, CSRF tokens). Built for an API-driven client (the
+pixel-perfect SPA, or a mobile client) rather than a browser holding a
+Frappe session cookie.
+
+### Token model
+
+Two token types, deliberately different:
+
+| | `access_token` | `refresh_token` |
+|---|---|---|
+| Format | JWT (HS256) | Opaque random string (`secrets.token_urlsafe(48)`) |
+| Lifetime | 40 min default (`retail_sop_access_token_ttl_seconds`) | 30 days default (`retail_sop_refresh_token_ttl_days`), sliding — resets on each use |
+| Validated by | Signature + expiry check, no DB read — plus **one** DB read per request to check it hasn't been revoked | A DB lookup by hash; there's nothing to "validate" client-side |
+| Stored server-side | Not stored at all (stateless) | Only its **sha256 hash**, in `Auth Session.refresh_token_hash` — the raw value is returned to the client once and never persisted |
+
+### `Auth Session` doctype
+
+One row per logged-in device/session:
+[`retail_sop/retail_sop/doctype/auth_session/`](retail_sop/retail_sop/doctype/auth_session/).
+`user`, `device_id`, `device_name`, `issued_at`, `expires_at`,
+`revoked_at`, `refresh_token_hash` (unique), `prev_refresh_token_hash`
+(kept for exactly one generation — see rotation below). Random-named
+(`autoname: hash`), System Manager only — users never see or touch this
+doctype directly, it's purely an implementation detail behind the API.
+
+### JWT signing (`auth/jwt_utils.py`)
+
+`PyJWT`, algorithm `HS256`. Signing keys live in `site_config.json`, not
+hardcoded, so they can be rotated without a deploy:
+
+```json
+{
+  "retail_sop_jwt_keys": { "2026-01": "<random secret>" },
+  "retail_sop_jwt_active_kid": "2026-01"
+}
+```
+
+Only `retail_sop_jwt_active_kid` signs *new* tokens; `decode_access_token`
+looks up the right secret via the `kid` carried in the JWT header, so
+multiple keys can be valid for verification simultaneously. **To rotate**:
+add a new kid/secret pair, point `retail_sop_jwt_active_kid` at the new
+one, and keep the old kid's secret in the map until every token signed
+with it has expired (one `access_token_ttl()` window after the switch) —
+then remove it. Payload: `{"sub": user, "sid": <Auth Session name>,
+"type": "access", "iat", "exp"}`.
+
+### Endpoints (`auth/api.py`)
+
+All `@frappe.whitelist(allow_guest=True, methods=["POST"])` except `me`
+and `logout_all`, which require an already-authenticated request (a
+valid `Authorization` header, processed by the middleware below) and use
+plain `@frappe.whitelist()`.
+
+| Method | Behavior |
+|---|---|
+| `login(usr, pwd, device_id, device_name=None)` | Verifies credentials via Frappe's own `check_password` (never a custom check), rejects disabled users and anyone without an allowed role (`ALLOWED_ROLES` in `auth/api.py` — currently Food Court Supervisor/Manager + System Manager as an admin escape hatch), inserts a new `Auth Session`, returns `{access_token, refresh_token, token_type: "Bearer", expires_in, user}` |
+| `refresh_token(refresh_token)` | Hashes the presented token, rotates it — see below |
+| `logout(refresh_token)` | Revokes the matching session; always returns `{success: true}` regardless of whether the token was recognized, so it never leaks that information |
+| `logout_all()` | Revokes every non-revoked `Auth Session` for `frappe.session.user` |
+| `me()` | Returns the same user-profile shape as `login`, for a silent session restore on app boot |
+
+**Refresh rotation + reuse/replay detection** — the security-sensitive
+part, verified in isolation against the exact scenarios below before
+being wired into the doctype:
+
+1. Normal case: the presented token's hash matches a live session's
+   `refresh_token_hash`. Rotate — move the current hash into
+   `prev_refresh_token_hash`, generate and hash a new refresh token,
+   issue a new access token.
+2. Presented token matches a session's `prev_refresh_token_hash` instead
+   (i.e. it was already rotated out exactly one generation ago): treated
+   as theft — the session is revoked immediately and the call rejected.
+   This is what catches a leaked/stolen refresh token being used after
+   the legitimate client already rotated past it.
+3. Presented token matches neither (rotated out *more* than one
+   generation ago, or never existed): rejected as invalid, no session
+   identified to revoke (there's nothing more specific to do — this is
+   the "kept for exactly one generation" tradeoff, not a full history).
+4. Two concurrent `refresh_token` calls racing on the same session: the
+   loser's `doc.save()` raises `frappe.TimestampMismatchError` (Frappe's
+   normal optimistic-concurrency check) — handled as a clean "already
+   used by another request, retry" error, not a revocation.
+
+### The bypass (`auth/middleware.py`, `before_request` hook)
+
+```python
+before_request = ["retail_sop.auth.middleware.authenticate_request"]
+```
+
+Runs on **every** request. Reads `Authorization: Bearer <token>`,
+decodes+verifies the JWT (signature, expiry, `type == "access"`), then
+re-checks that session's `Auth Session.revoked_at` in the DB — this one
+DB read is what makes `logout` take effect immediately rather than
+waiting for the JWT to expire on its own. If everything checks out,
+`frappe.set_user(user)` makes the rest of the request run as that real
+user, with roles evaluated live and normally by everything downstream —
+`retail_sop/api.py`'s existing `_check_auth()` and default
+`@frappe.whitelist()` methods work against this exactly as if a cookie
+session had authenticated them, no changes needed there. If there's
+no/garbage/expired header, the hook does nothing — the request proceeds
+as Guest and any protected endpoint's own `allow_guest=False` (the
+default) rejects it with a normal `PermissionError`. No `sid` cookie is
+ever involved, so Frappe's CSRF check (which only triggers for
+cookie-backed sessions) never engages either.
+
+The whole hook is wrapped in a broad `except Exception` that
+`frappe.log_error`s and falls through to Guest — a `before_request` hook
+runs for literally every request on the site (Desk included), so a bug
+or a missing `site_config.json` key here must never be able to take the
+whole site down; worst case is just an authentication attempt failing
+safe instead of crashing.
+
+**Gotcha, called out explicitly in the code**: `frappe.set_user()` resets
+`frappe.local.form_dict` as a side effect (it assumes it runs *before*
+the request body is parsed). Since this hook runs *after* parsing, the
+middleware saves and restores `frappe.local.form_dict` around the
+`set_user()` call — otherwise every request's params would silently
+vanish the moment a valid bearer token was presented.
+
+### Setup
+
+Required in `site_config.json` before `login()` will work at all (see
+§9 Installation for the `bench set-config` commands):
+`retail_sop_jwt_keys`, `retail_sop_jwt_active_kid`. Everything else
+(`retail_sop_access_token_ttl_seconds`, `retail_sop_refresh_token_ttl_days`)
+has a default and is optional.
 
 ---
 
