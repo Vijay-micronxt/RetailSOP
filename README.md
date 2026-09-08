@@ -382,13 +382,10 @@ After install, `bench --site your-site backup` then verify:
 - A demo template **Pre-Opening Demo** exists (Retail SOP → Checklist
   Template) with a placeholder 12-check list — replace with the real
   reference checklist.
-- Add JWT signing keys to `site_config.json` (see §12) — **the frontend
-  cannot log in until this is done**:
-  ```bash
-  bench --site your-site set-config retail_sop_jwt_keys '{"2026-01": "<random 32+ byte secret>"}' --parse
-  bench --site your-site set-config retail_sop_jwt_active_kid "2026-01"
-  ```
-  Generate the secret with e.g. `openssl rand -base64 48`.
+- Add JWT signing keys (and, if the frontend is a different origin,
+  `allow_cors`) to `site_config.json` — **the frontend cannot log in
+  until this is done**. See §12 "Setup" for the exact commands, and
+  "Troubleshooting" there if login fails after this step.
 
 ---
 
@@ -588,11 +585,62 @@ vanish the moment a valid bearer token was presented.
 
 ### Setup
 
-Required in `site_config.json` before `login()` will work at all (see
-§9 Installation for the `bench set-config` commands):
-`retail_sop_jwt_keys`, `retail_sop_jwt_active_kid`. Everything else
-(`retail_sop_access_token_ttl_seconds`, `retail_sop_refresh_token_ttl_days`)
-has a default and is optional.
+All of this lives in `site_config.json` (per-site, **not**
+`common_site_config.json`) — there is no other credential store, OAuth
+app registration, or bench-level secret involved.
+
+**Required** before `login()` will work at all:
+```bash
+bench --site your-site set-config retail_sop_jwt_keys '{"2026-01": "<random secret>"}' --parse
+bench --site your-site set-config retail_sop_jwt_active_kid "2026-01"
+```
+Generate the secret with e.g. `openssl rand -base64 48`. See "JWT
+signing" above for what `retail_sop_jwt_keys` being a `{kid: secret}`
+map buys you (rotation without breaking already-issued tokens).
+
+**Optional**, both already have sane defaults:
+```bash
+bench --site your-site set-config retail_sop_access_token_ttl_seconds 2400   # 40 min
+bench --site your-site set-config retail_sop_refresh_token_ttl_days 30
+```
+
+**Also required, but not a JWT setting**: if the frontend is served from
+a different origin than this site (the normal case — see the
+pixel-perfect repo, deployed separately), the browser will block every
+request regardless of a valid token unless CORS is enabled:
+```bash
+bench --site your-site set-config allow_cors "https://your-frontend-origin.example.com"
+```
+
+### Troubleshooting
+
+- **`Failed to get method for command retail_sop.auth.api.login with No
+  module named 'retail_sop.auth'`** — the site's installed app code is
+  stale; `retail_sop/auth/` exists in git but hasn't reached the
+  bench's `apps/retail_sop` checkout yet, or the already-running
+  workers haven't picked it up. `cd apps/retail_sop && git pull`, then
+  from the bench root: `bench --site your-site migrate`,
+  `bench build --app retail_sop`, `bench restart` — the restart matters,
+  since already-running Python processes cache what modules exist and
+  won't see a new subpackage without one. If `git pull` refuses because
+  of local changes to `retail_sop/fixtures/*.json`, that's almost always
+  fixture-export drift (something ran `bench export-fixtures` and
+  rewrote the file with the live DB row, same values, extra default
+  fields) rather than an intentional edit — `git diff` the file to
+  confirm, then `git checkout -- <file>` and pull again.
+- **401 on `login()`** — this is `frappe.AuthenticationError`, which
+  this endpoint only raises from `check_password()` (wrong username or
+  password) or the disabled-user check in `_ensure_allowed()` — **not**
+  from missing JWT config. `check_password()` runs first, before
+  `encode_access_token()` ever touches `retail_sop_jwt_keys`, so a 401
+  here means the credentials themselves are the problem (or the account
+  never had a password set via Frappe's invite flow), not a setup step
+  you've missed. A role that isn't in `ALLOWED_ROLES` fails differently
+  (403, `frappe.PermissionError`), and missing/incomplete JWT key config
+  fails differently again (a plain `frappe.throw` naming the missing
+  `site_config.json` key) — both only reachable *after* the password
+  check passes. Check the response body's `_server_messages` for the
+  exact message rather than going by HTTP status alone.
 
 ---
 
