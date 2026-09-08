@@ -76,6 +76,7 @@ retail_sop/
 └── retail_sop/
     ├── doctype/
     │   ├── outlet/
+    │   ├── checklist_category/
     │   ├── checklist_template/            (+ checklist_template_item, child table)
     │   ├── shift_checklist/               (+ shift_checklist_item, child table)
     │   ├── checklist_deviation/
@@ -97,9 +98,26 @@ User, optional) assigns the one Store Operator account that can see this
 outlet's read-only hygiene/rating summary (§8, §12) — one operator per
 outlet.
 
+There is deliberately no fixed/seeded outlet list beyond what the demo
+patch creates (`Common Area`) — this app is white-labelled across
+different food courts, so each site's Food Court Manager creates their
+own outlets from the Desk (or the `Checklist Category`/Outlet list
+view), and `list_outlets()` (§8) just reflects whatever's active.
+
+### Checklist Category (master)
+Same shape and purpose as `Outlet` (`category_name` unique + `active`),
+used as the `Link` target for the `category` field on `Checklist
+Template Item`, `Shift Checklist Item` (via `fetch_from`), and
+`Checklist Deviation`. Also not a fixed list: a Food Court Manager adds
+or retires categories from the Desk, and `list_categories()` (§8) reads
+straight from this doctype. `get_my_store_summary()` (§8) filters
+Hygiene-category rows by comparing against the literal string
+`"Hygiene"`, so a site using that endpoint needs a category record
+named exactly `Hygiene`.
+
 ### Checklist Template (master) → Checklist Template Item (child)
 Defines a reusable checklist for a shift type. Each item row configures:
-category, input type (Tick / Numeric / Text / Photo), a standard/reference
+category (Link → Checklist Category), input type (Tick / Numeric / Text / Photo), a standard/reference
 value, numeric min/max thresholds, and flags — `is_mandatory`,
 `requires_photo`, `escalate_on_fail`, `vendor_specific` — plus who to
 escalate to (`escalate_to_type`: User or Role, with a matching `Dynamic
@@ -276,16 +294,15 @@ This API is written to match a specific, already-built frontend —
 [pixel-perfect](https://github.com/Vijay-micronxt/pixel-perfect), a
 Lovable-generated app whose `src/services/sopService.ts` and
 `src/services/types.ts` document the exact contract every screen is
-coded against (currently backed by in-memory mock data there; wiring it
-up to this API means swapping each function body in `sopService.ts` for
-a `fetch()`/`frappe.call()` to the matching method below — the frontend's
-own function names, parameters, and return shapes were the spec for
-this rewrite, not the other way around).
+coded against — the frontend's own function names, parameters, and
+return shapes were the spec for this API, not the other way around.
+Every function in `sopService.ts` now calls the matching method below
+via `fetch()`/`callMethod()`; there's no mock data left in that app.
 
 | Frontend (`sopService.ts`) | Backend (`api.py`) | Notes |
 |---|---|---|
 | `listOutlets()` | `list_outlets()` | Active `Outlet` records |
-| `listCategories()` | `list_categories()` | Pulled live from the `category` Select's options — single source of truth |
+| `listCategories()` | `list_categories()` | Active `Checklist Category` records — single source of truth |
 | `getTodayChecklists()` | `get_today_checklists()` | Full checklists (with items), not a summary list |
 | `getChecklist(name)` | `get_checklist(name)` | `None` if not found |
 | `getHistory(from, to)` | `get_history(from_date=None, to_date=None)` | Submitted checklists (any workflow state) in range |
@@ -352,17 +369,16 @@ calls for. Returns:
 | Key | Shape | Notes |
 |---|---|---|
 | `complianceTrend` | `[{month, outlet, compliance}]` | Last 6 months, submitted checklists only — window not configurable |
-| `deviationsByOutlet` | `[{outlet, <category>: count, ...}]` | Wide/pivoted, one key per **real** category (`Common Area`/`Hygiene`/`Vendor Compliance`/`Revenue`/`Safety`) |
+| `deviationsByOutlet` | `[{outlet, <category>: count, ...}]` | Wide/pivoted, one key per active `Checklist Category` record on this site |
 | `vendorScorecard` | `[{outlet, compliance, deviations}]` | Despite the name, this is outlet-level — matches how `dashboards.tsx` actually renders it ("Outlet scorecard") |
 | `repeatFailures` | `[{check_description, outlet, fail_count}]` | All-time count per check+outlet, `> 3` — the original brief's per-month window doesn't fit this flatter shape |
 | `escalations` | `{open, closed}` | Deviation counts by resolution status |
 
-**Frontend follow-up needed**: `dashboards.tsx`'s bar chart currently
-hardcodes `<Bar dataKey="Hygiene">`, `"Temperature"`, `"Safety"`,
-`"Documentation"` — placeholder category names from the mock data that
-don't match the doctype's real ones. It needs a small change to render
-bars dynamically from whatever keys `deviationsByOutlet` actually
-carries (or to hardcode the real 5 category names instead).
+Since `category` is now ERP-managed master data with no fixed list
+(§3), `dashboards.tsx`'s deviations-by-category bar chart renders its
+`<Bar>`s dynamically from whatever keys `deviationsByOutlet` actually
+carries (`categoryKeys()` in that file), rather than one hardcoded
+`<Bar dataKey="...">` per category name.
 
 ---
 

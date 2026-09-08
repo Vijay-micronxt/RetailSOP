@@ -9,7 +9,7 @@
  "icon": "list",
  "sequence_id": 20.0,
  "parent_page": "",
- "content": "[{\"id\":\"rsop_header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Retail SOP</b></span>\",\"col\":12}},{\"id\":\"rsop_para\",\"type\":\"paragraph\",\"data\":{\"text\":\"<span class=\\\"text-muted\\\">Multi-outlet food court SOP &amp; compliance checklists.</span>\",\"col\":12}},{\"id\":\"rsop_sc1\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Shift Checklist\",\"col\":3}},{\"id\":\"rsop_sc2\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Checklist Deviation\",\"col\":3}},{\"id\":\"rsop_sc3\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Checklist Template\",\"col\":3}},{\"id\":\"rsop_sc4\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Outlet\",\"col\":3}},{\"id\":\"rsop_spacer\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"rsop_card1\",\"type\":\"card\",\"data\":{\"card_name\":\"Operations\",\"col\":4}},{\"id\":\"rsop_card2\",\"type\":\"card\",\"data\":{\"card_name\":\"Configuration\",\"col\":4}}]",
+ "content": "[{\"id\":\"rsop_header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Retail SOP</b></span>\",\"col\":12}},{\"id\":\"rsop_para\",\"type\":\"paragraph\",\"data\":{\"text\":\"<span class=\\\"text-muted\\\">Multi-outlet food court SOP &amp; compliance checklists.</span>\",\"col\":12}},{\"id\":\"rsop_sc1\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Shift Checklist\",\"col\":3}},{\"id\":\"rsop_sc2\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Checklist Deviation\",\"col\":3}},{\"id\":\"rsop_sc3\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Checklist Template\",\"col\":3}},{\"id\":\"rsop_sc4\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Outlet\",\"col\":3}},{\"id\":\"rsop_sc5\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Checklist Category\",\"col\":3}},{\"id\":\"rsop_spacer\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"rsop_card1\",\"type\":\"card\",\"data\":{\"card_name\":\"Operations\",\"col\":4}},{\"id\":\"rsop_card2\",\"type\":\"card\",\"data\":{\"card_name\":\"Configuration\",\"col\":4}}]",
  "shortcuts": [
   {
    "label": "Shift Checklist",
@@ -38,6 +38,13 @@
    "link_to": "Outlet",
    "doc_view": "List",
    "color": "Yellow"
+  },
+  {
+   "label": "Checklist Category",
+   "type": "DocType",
+   "link_to": "Checklist Category",
+   "doc_view": "List",
+   "color": "Purple"
   }
  ],
  "links": [
@@ -61,7 +68,7 @@
   {
    "type": "Card Break",
    "label": "Configuration",
-   "link_count": 2
+   "link_count": 3
   },
   {
    "type": "Link",
@@ -74,6 +81,12 @@
    "link_type": "DocType",
    "link_to": "Outlet",
    "label": "Outlet"
+  },
+  {
+   "type": "Link",
+   "link_type": "DocType",
+   "link_to": "Checklist Category",
+   "label": "Checklist Category"
   }
  ],
  "roles": [],

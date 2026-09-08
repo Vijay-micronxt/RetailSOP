@@ -80,8 +80,12 @@ def _computed_status(doc):
 
 
 def _get_category_options():
-	field = frappe.get_meta("Checklist Template Item").get_field("category")
-	return [c for c in (field.options or "").split("\n") if c]
+	# Categories are ERP-managed master data (Checklist Category), not a
+	# fixed list - any Food Court Manager can add/retire one from the Desk
+	# and it shows up here immediately, no code change needed.
+	return frappe.get_all(
+		"Checklist Category", filters={"active": 1}, pluck="name", order_by="name"
+	)
 
 
 def _serialize_checklist(doc):

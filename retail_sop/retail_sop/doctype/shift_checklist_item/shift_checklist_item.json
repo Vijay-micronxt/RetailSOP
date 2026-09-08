@@ -49,10 +49,10 @@
   {
    "fetch_from": "template_item.category",
    "fieldname": "category",
-   "fieldtype": "Select",
+   "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Category",
-   "options": "Common Area\nHygiene\nVendor Compliance\nRevenue\nSafety",
+   "options": "Checklist Category",
    "read_only": 1
   },
   {
