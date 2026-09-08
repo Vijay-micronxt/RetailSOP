@@ -7,7 +7,8 @@
  "engine": "InnoDB",
  "field_order": [
   "outlet_name",
-  "active"
+  "active",
+  "store_operator"
  ],
  "fields": [
   {
@@ -24,6 +25,13 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "Active"
+  },
+  {
+   "description": "The Store Operator user who can see this outlet's read-only hygiene/rating summary (retail_sop.api.get_my_store_summary). One operator per outlet.",
+   "fieldname": "store_operator",
+   "fieldtype": "Link",
+   "label": "Store Operator",
+   "options": "User"
   }
  ],
  "index_web_pages_for_search": 1,

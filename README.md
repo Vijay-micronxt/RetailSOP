@@ -92,7 +92,10 @@ Simple list of physical outlets/areas, e.g. individual food stalls plus a
 shared `Common Area` entry (seeded by the demo patch). Used as the `Link`
 target for `Checklist Template.location`, `Shift Checklist.location`, and
 `Checklist Deviation.outlet` — one configurable list instead of a
-hardcoded Select duplicated across doctypes.
+hardcoded Select duplicated across doctypes. `store_operator` (Link →
+User, optional) assigns the one Store Operator account that can see this
+outlet's read-only hygiene/rating summary (§8, §12) — one operator per
+outlet.
 
 ### Checklist Template (master) → Checklist Template Item (child)
 Defines a reusable checklist for a shift type. Each item row configures:
@@ -120,17 +123,39 @@ severity, resolution status, and closure (`closed_by`/`closed_on`).
 
 ## 4. Roles & permissions
 
-Three roles, on top of the standard `System Manager`:
+Four roles, on top of the standard `System Manager`:
 
 | Role | Checklist Template | Shift Checklist | Checklist Deviation |
 |---|---|---|---|
 | **System Manager** | full CRUD | full CRUD + submit/cancel/amend | full CRUD + submit/cancel/amend |
 | **Food Court Supervisor** | read-only | create, read, write, **submit** | create, read, write, submit |
 | **Food Court Manager** | read + report | read, write (to Verify) + report | full CRUD + submit/cancel/amend |
+| **Store Operator** | none | none | none |
 
-`Food Court Supervisor` and `Food Court Manager` are shipped as a
-[Role fixture](retail_sop/fixtures/role.json) so they exist right after
-install — no manual setup step.
+`Store Operator` deliberately holds **no doctype-level permission** on
+any of these — it's not a smaller version of Supervisor/Manager, it's a
+narrow, code-scoped view onto one outlet's data. It can authenticate
+(§12) and call exactly one endpoint,
+[`get_my_store_summary()`](#8-whitelisted-api-retail_sopapipy), which
+looks up the single `Outlet` where `store_operator` = that user and
+returns only that outlet's Hygiene-category check results and an
+overall rating — nothing else, and no other outlet's data. It also has
+`desk_access: 0` (unlike the other two roles), since it's meant purely
+for this one read-only view, not Desk use.
+
+One consequence worth knowing: because Store Operator has no read
+permission on `Shift Checklist`, calling one of the broader endpoints in
+§8 (`get_today_checklists`, `get_deviations`, etc.) as a Store Operator
+doesn't error — Frappe's permission-filtered `get_all` just silently
+returns an empty list. No data leaks either way, but it's a quiet empty
+result rather than an explicit rejection; worth keeping in mind if this
+ever needs to change to a hard error instead.
+
+`Food Court Supervisor`, `Food Court Manager`, and `Store Operator` are
+all shipped as a [Role fixture](retail_sop/fixtures/role.json) so they
+exist right after install — no manual setup step (assigning a Store
+Operator to a specific `Outlet.store_operator` is still a manual step,
+done per-outlet in Desk).
 
 ---
 
@@ -273,6 +298,30 @@ this rewrite, not the other way around).
 | `createDeviation(input)` | `create_deviation(outlet, category, severity, issue, action_taken, photo=None)` | Critical severity auto-sets `escalated_to = "Food Court Manager"` |
 | `updateDeviationStatus(name, status)` | `update_deviation_status(name, resolution_status)` | Clears `closed_by`/`closed_on` when moved off Closed |
 
+### `get_my_store_summary()` — Store Operator only
+
+Not part of the pixel-perfect frontend contract above (no
+`sopService.ts` equivalent yet) — a separate, narrower endpoint for the
+`Store Operator` role (§4). Takes no arguments; looks up the single
+`Outlet` where `store_operator` = the calling user and returns:
+
+```json
+{
+  "outlet": "Spice Route",
+  "rating": 91.5,
+  "hygiene_checks": [
+    {"date": "2026-09-05", "check_description": "...", "status": "OK", "remarks": null}
+  ]
+}
+```
+
+`rating` is the average `compliance_score` across that outlet's last 30
+submitted Shift Checklists (not a fixed date window — flagged as an
+assumption, adjust in `api.py` if a different definition of "rating" is
+wanted). `hygiene_checks` is every `Hygiene`-category row from those same
+checklists. Throws `PermissionError` if the calling user isn't set as
+any outlet's `store_operator`.
+
 A few deliberate departures from the app's original design, made to
 match this frontend's actual contract:
 - The doctype's own `status` field (Draft/In Progress/Completed/
@@ -370,8 +419,11 @@ worth confirming against real requirements:
 - The 12-item demo checklist in the seed patch is a **placeholder** —
   swap in the real reference list.
 - **JWT `ALLOWED_ROLES` gate** (`auth/api.py`) is currently Food Court
-  Supervisor + Food Court Manager + System Manager — adjust if other
-  roles should be able to log in through this API.
+  Supervisor + Food Court Manager + Store Operator + System Manager —
+  adjust if other roles should be able to log in through this API. Being
+  in this set only grants the ability to authenticate; it doesn't by
+  itself grant access to any particular endpoint (see the Store Operator
+  row in §4 — it's in `ALLOWED_ROLES` but has no doctype permissions).
 - **Refresh token sliding expiration**: each successful `refresh_token`
   call resets `expires_at` to a fresh 30-day window rather than counting
   down from original login — a device in regular use effectively never
@@ -470,7 +522,7 @@ plain `@frappe.whitelist()`.
 
 | Method | Behavior |
 |---|---|
-| `login(usr, pwd, device_id, device_name=None)` | Verifies credentials via Frappe's own `check_password` (never a custom check), rejects disabled users and anyone without an allowed role (`ALLOWED_ROLES` in `auth/api.py` — currently Food Court Supervisor/Manager + System Manager as an admin escape hatch), inserts a new `Auth Session`, returns `{access_token, refresh_token, token_type: "Bearer", expires_in, user}` |
+| `login(usr, pwd, device_id, device_name=None)` | Verifies credentials via Frappe's own `check_password` (never a custom check), rejects disabled users and anyone without an allowed role (`ALLOWED_ROLES` in `auth/api.py` — Food Court Supervisor/Manager, Store Operator, + System Manager as an admin escape hatch), inserts a new `Auth Session`, returns `{access_token, refresh_token, token_type: "Bearer", expires_in, user}` |
 | `refresh_token(refresh_token)` | Hashes the presented token, rotates it — see below |
 | `logout(refresh_token)` | Revokes the matching session; always returns `{success: true}` regardless of whether the token was recognized, so it never leaks that information |
 | `logout_all()` | Revokes every non-revoked `Auth Session` for `frappe.session.user` |

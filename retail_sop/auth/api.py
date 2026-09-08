@@ -23,8 +23,12 @@ from retail_sop.auth.utils import build_user_profile, generate_opaque_token, has
 
 # This app's own "is this account allowed to use this app" gate - the
 # staff roles that may hold an Auth Session, plus System Manager as an
-# admin escape hatch.
-ALLOWED_ROLES = {"Food Court Supervisor", "Food Court Manager", "System Manager"}
+# admin escape hatch. Store Operator is intentionally read-only at the API
+# level (see retail_sop.api.get_my_store_summary) - being allowed to log
+# in here doesn't grant it access to the broader supervisor/manager
+# endpoints, which require doctype read permissions Store Operator doesn't
+# have.
+ALLOWED_ROLES = {"Food Court Supervisor", "Food Court Manager", "Store Operator", "System Manager"}
 
 
 def _ensure_allowed(user):

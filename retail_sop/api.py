@@ -212,6 +212,72 @@ def get_deviations(outlet=None):
 	return [_serialize_deviation(frappe.get_doc("Checklist Deviation", n)) for n in names]
 
 
+# ------------------------------ store operator -------------------------------
+# Read-only, self-scoped to the caller's own outlet - deliberately separate
+# from the supervisor/manager surface above. The Store Operator role holds
+# no doctype-level read permission on Shift Checklist at all (see the Role
+# fixture / README §4), so the outlet scoping below - not the permission
+# engine - is what limits access; ignore_permissions=True is used
+# accordingly, the same way other endpoints in this file already use it for
+# writes.
+
+
+@frappe.whitelist()
+def get_my_store_summary():
+	"""Hygiene checks + an overall rating for the single Outlet the calling
+	user is the store_operator of. Throws if the account isn't linked to a
+	store. Only exposes Hygiene-category rows and a compliance-score
+	average - not the full checklist detail the supervisor/manager
+	endpoints return.
+	"""
+	_check_auth()
+
+	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
+	if not outlet:
+		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+
+	# Last 30 submitted checklists for this outlet - the "rating" is their
+	# average compliance_score. Window/definition not specified beyond
+	# "rating"; adjust here if the product wants e.g. a 30-day window
+	# instead of a fixed checklist count, or the latest score instead of
+	# an average.
+	checklists = frappe.get_all(
+		"Shift Checklist",
+		filters={"location": outlet, "docstatus": 1},
+		fields=["name", "date", "compliance_score"],
+		order_by="date desc",
+		limit_page_length=30,
+		ignore_permissions=True,
+	)
+
+	hygiene_checks = []
+	for checklist in checklists:
+		doc = frappe.get_doc("Shift Checklist", checklist.name)
+		for row in doc.items:
+			if row.category != "Hygiene":
+				continue
+			hygiene_checks.append(
+				{
+					"date": str(doc.date),
+					"check_description": row.check_description,
+					"status": row.status,
+					"remarks": row.remarks,
+				}
+			)
+
+	rating = (
+		round(sum(c.compliance_score for c in checklists) / len(checklists), 2)
+		if checklists
+		else 0.0
+	)
+
+	return {
+		"outlet": outlet,
+		"rating": rating,
+		"hygiene_checks": hygiene_checks,
+	}
+
+
 @frappe.whitelist()
 def get_dashboard_data():
 	_check_auth()
