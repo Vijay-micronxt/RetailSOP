@@ -1,10 +1,32 @@
-"""Whitelisted REST API surface consumed by the Lovable.dev frontend.
+"""Whitelisted REST API surface consumed by the pixel-perfect frontend
+(https://github.com/Vijay-micronxt/pixel-perfect).
+
+This module's function names, parameters, and return shapes are written to
+match that frontend's data-access layer 1:1 - see its src/services/types.ts
+and src/services/sopService.ts, which document the exact contract every
+screen is built against (currently backed by in-memory mock data there;
+this module is what the fetch() calls swap in for it). Method name mapping:
+
+    frontend (sopService.ts)         backend (this module)
+    -------------------------------  -------------------------------
+    listOutlets()                    list_outlets()
+    listCategories()                 list_categories()
+    getTodayChecklists()             get_today_checklists()
+    getChecklist(name)               get_checklist(name)
+    getHistory(from, to)             get_history(from_date, to_date)
+    getVerificationQueue()           get_verification_queue()
+    getDeviations(outlet)            get_deviations(outlet)
+    getDashboardData()               get_dashboard_data()
+    saveChecklistRow(name, sr_no, u) save_checklist_row(checklist_name, sr_no, ...)
+    submitChecklist(name)            submit_checklist(name)
+    verifyChecklist(name)            verify_checklist(name)
+    createDeviation(input)           create_deviation(...)
+    updateDeviationStatus(name, s)   update_deviation_status(name, resolution_status)
 
 Auth: assumes Frappe's built-in API key/secret (token) authentication,
-enforced by the framework before a request reaches these handlers (i.e.
-Authorization: token <api_key>:<api_secret>). `_check_auth` is kept as a
-single choke point so the strategy can be swapped later (e.g. a custom
-header, JWT) without touching every method.
+enforced by the framework before a request reaches these handlers.
+`_check_auth` is kept as a single choke point so the strategy can be
+swapped later without touching every method.
 
 All responses are plain dict/list JSON - no Frappe Document objects or
 internal metadata are returned directly.
@@ -12,7 +34,7 @@ internal metadata are returned directly.
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime, today
+from frappe.utils import cint, flt, get_datetime, now_datetime, nowtime, today
 
 from retail_sop.retail_sop.doctype.shift_checklist.shift_checklist import (
 	ShiftChecklistValidationError,
@@ -24,94 +46,76 @@ def _check_auth():
 		frappe.throw(_("Authentication required"), frappe.AuthenticationError)
 
 
-@frappe.whitelist()
-def get_todays_checklists(supervisor=None):
-	"""List today's Shift Checklists, optionally filtered by supervisor."""
-	_check_auth()
-
-	filters = {"date": today()}
-	if supervisor:
-		filters["supervisor"] = supervisor
-
-	return frappe.get_all(
-		"Shift Checklist",
-		filters=filters,
-		fields=[
-			"name",
-			"date",
-			"shift_type",
-			"location",
-			"supervisor",
-			"checklist_template",
-			"start_time",
-			"end_time",
-			"status",
-			"workflow_state",
-			"docstatus",
-			"compliance_score",
-			"total_checks",
-			"failed_checks",
-		],
-		order_by="creation desc",
-	)
+def _format_time(value):
+	"""HH:MM, matching the frontend's display convention. Accepts a
+	Datetime, Time (timedelta/str), or plain string value."""
+	if not value:
+		return None
+	try:
+		return get_datetime(value).strftime("%H:%M")
+	except Exception:
+		s = str(value)
+		return s[:5] if len(s) >= 5 else s
 
 
-@frappe.whitelist()
-def get_checklist_detail(name):
-	"""Full checklist with items, each row carrying its template context
-	(standard, thresholds, mandatory/photo flags) so the frontend doesn't
-	need a second round trip per row.
+def _computed_status(doc):
+	"""Maps our docstatus/workflow_state onto the frontend's ChecklistStatus
+	union (Draft/In Progress/Submitted/Verified/Escalated) - the doctype's
+	own `status` field is kept for internal/Desk bookkeeping only and is
+	not the source of truth for what the API reports.
 	"""
-	_check_auth()
+	if doc.docstatus == 2:
+		return "Draft"
+	if doc.docstatus == 0:
+		return "In Progress" if any(row.status for row in doc.items) else "Draft"
+	if doc.workflow_state == "Verified":
+		return "Verified"
+	if doc.failed_checks:
+		return "Escalated"
+	return "Submitted"
 
-	doc = frappe.get_doc("Shift Checklist", name)
 
+def _get_category_options():
+	field = frappe.get_meta("Checklist Template Item").get_field("category")
+	return [c for c in (field.options or "").split("\n") if c]
+
+
+def _serialize_checklist(doc):
 	items = []
 	for row in doc.items:
-		template = {}
-		if row.template_item:
-			template_item = frappe.get_cached_doc("Checklist Template Item", row.template_item)
-			template = {
-				"input_type": template_item.input_type,
-				"standard": template_item.standard,
-				"min_value": template_item.min_value,
-				"max_value": template_item.max_value,
-				"is_mandatory": bool(template_item.is_mandatory),
-				"requires_photo": bool(template_item.requires_photo),
-				"escalate_on_fail": bool(template_item.escalate_on_fail),
-				"vendor_specific": bool(template_item.vendor_specific),
-			}
-
+		template_item = (
+			frappe.get_cached_doc("Checklist Template Item", row.template_item)
+			if row.template_item
+			else None
+		)
 		items.append(
 			{
-				"row_name": row.name,
 				"sr_no": row.sr_no,
 				"check_description": row.check_description,
 				"category": row.category,
 				"standard": row.standard,
-				"status": row.status,
+				"input_type": template_item.input_type if template_item else "Tick",
+				"min_value": template_item.min_value if template_item else None,
+				"max_value": template_item.max_value if template_item else None,
+				"is_mandatory": 1 if (template_item and template_item.is_mandatory) else 0,
+				"requires_photo": 1 if (template_item and template_item.requires_photo) else 0,
+				"status": row.status or None,
 				"reading": row.reading,
-				"checked_at": row.checked_at,
+				"checked_at": _format_time(row.checked_at),
 				"checked_by": row.checked_by,
 				"remarks": row.remarks,
 				"attachment": row.attachment,
 				"vendor": row.vendor,
-				"template": template,
 			}
 		)
 
 	return {
 		"name": doc.name,
-		"date": doc.date,
+		"date": str(doc.date),
 		"shift_type": doc.shift_type,
 		"location": doc.location,
 		"supervisor": doc.supervisor,
-		"checklist_template": doc.checklist_template,
-		"start_time": doc.start_time,
-		"end_time": doc.end_time,
-		"status": doc.status,
-		"workflow_state": doc.workflow_state,
-		"docstatus": doc.docstatus,
+		"status": _computed_status(doc),
 		"compliance_score": doc.compliance_score,
 		"total_checks": doc.total_checks,
 		"failed_checks": doc.failed_checks,
@@ -119,52 +123,140 @@ def get_checklist_detail(name):
 	}
 
 
+def _serialize_deviation(doc):
+	return {
+		"name": doc.name,
+		"date": str(doc.date),
+		"time": _format_time(doc.time),
+		"outlet": doc.outlet,
+		"category": doc.category,
+		"severity": doc.severity,
+		"issue": doc.issue,
+		"action_taken": doc.action_taken,
+		"photo": doc.photo,
+		"resolution_status": doc.resolution_status,
+		"escalated_to": doc.escalated_to,
+		"closed_by": doc.closed_by,
+		"closed_on": str(doc.closed_on) if doc.closed_on else None,
+	}
+
+
+def _get_checklist_names(conditions, order_by):
+	return frappe.get_all("Shift Checklist", filters=conditions, pluck="name", order_by=order_by)
+
+
+# ---------------------------------- reads -----------------------------------
+
+
 @frappe.whitelist()
-def update_check_item(checklist, row_name, status=None, reading=None, remarks=None):
-	"""Update one Shift Checklist Item row. Stamps checked_at/checked_by
-	server-side and returns the live compliance_score/failed_checks so the
-	frontend can show progress without re-fetching the whole document.
-	"""
+def list_outlets():
+	_check_auth()
+	return frappe.get_all("Outlet", filters={"active": 1}, pluck="outlet_name", order_by="outlet_name")
+
+
+@frappe.whitelist()
+def list_categories():
+	_check_auth()
+	return _get_category_options()
+
+
+@frappe.whitelist()
+def get_today_checklists():
+	_check_auth()
+	names = _get_checklist_names([["date", "=", today()], ["docstatus", "!=", 2]], "creation desc")
+	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+
+
+@frappe.whitelist()
+def get_checklist(name):
+	_check_auth()
+	if not frappe.db.exists("Shift Checklist", name):
+		return None
+	return _serialize_checklist(frappe.get_doc("Shift Checklist", name))
+
+
+@frappe.whitelist()
+def get_history(from_date=None, to_date=None):
+	_check_auth()
+	conditions = [["docstatus", "=", 1]]
+	if from_date:
+		conditions.append(["date", ">=", from_date])
+	if to_date:
+		conditions.append(["date", "<=", to_date])
+	names = _get_checklist_names(conditions, "date desc")
+	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+
+
+@frappe.whitelist()
+def get_verification_queue():
+	_check_auth()
+	names = _get_checklist_names(
+		[["docstatus", "=", 1], ["workflow_state", "!=", "Verified"]], "date asc"
+	)
+	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+
+
+@frappe.whitelist()
+def get_deviations(outlet=None):
+	_check_auth()
+	filters = {}
+	if outlet and outlet != "All":
+		filters["outlet"] = outlet
+	names = frappe.get_all(
+		"Checklist Deviation", filters=filters, pluck="name", order_by="date desc, creation desc"
+	)
+	return [_serialize_deviation(frappe.get_doc("Checklist Deviation", n)) for n in names]
+
+
+@frappe.whitelist()
+def get_dashboard_data():
+	_check_auth()
+	return {
+		"complianceTrend": _dashboard_compliance_trend(),
+		"deviationsByOutlet": _dashboard_deviations_by_outlet(),
+		"vendorScorecard": _dashboard_vendor_scorecard(),
+		"repeatFailures": _dashboard_repeat_failures(),
+		"escalations": _dashboard_escalations(),
+	}
+
+
+# --------------------------------- writes ------------------------------------
+
+
+@frappe.whitelist()
+def save_checklist_row(checklist_name, sr_no, status=None, reading=None, remarks=None, attachment=None):
 	_check_auth()
 
-	doc = frappe.get_doc("Shift Checklist", checklist)
+	doc = frappe.get_doc("Shift Checklist", checklist_name)
 	if doc.docstatus != 0:
 		frappe.throw(_("Cannot update items on a submitted or cancelled Shift Checklist."))
 
-	row = next((r for r in doc.items if r.name == row_name), None)
+	row = next((r for r in doc.items if cint(r.sr_no) == cint(sr_no)), None)
 	if not row:
-		frappe.throw(_("Row {0} not found in {1}.").format(row_name, checklist))
+		frappe.throw(_("Row with Sr No {0} not found in {1}.").format(sr_no, checklist_name))
 
 	if status is not None:
-		row.status = status
+		row.status = status or ""
 	if reading is not None:
 		row.reading = reading
 	if remarks is not None:
 		row.remarks = remarks
+	if attachment is not None:
+		row.attachment = attachment
 
-	row.checked_at = now_datetime()
-	row.checked_by = frappe.session.user
+	if status:
+		row.checked_at = now_datetime()
+		row.checked_by = frappe.session.user
 
 	doc.save()
-
-	updated_row = next(r for r in doc.items if r.name == row_name)
-	return {
-		"row_name": updated_row.name,
-		"status": updated_row.status,
-		"reading": updated_row.reading,
-		"checked_at": updated_row.checked_at,
-		"checked_by": updated_row.checked_by,
-		"compliance_score": doc.compliance_score,
-		"total_checks": doc.total_checks,
-		"failed_checks": doc.failed_checks,
-	}
+	return _serialize_checklist(doc)
 
 
 @frappe.whitelist()
 def submit_checklist(name):
-	"""Submit a Shift Checklist. Validation (mandatory/photo/numeric-range
-	rules) lives entirely in ShiftChecklist.validate() - this just calls
-	submit() and reshapes whatever it raised.
+	"""Validation (mandatory/photo/completeness rules) lives entirely in
+	ShiftChecklist.validate() - this just calls submit() and reshapes
+	whatever it raised into the frontend's SubmitResponse shape.
 	"""
 	_check_auth()
 
@@ -172,305 +264,176 @@ def submit_checklist(name):
 	try:
 		doc.submit()
 	except ShiftChecklistValidationError as e:
-		return {
-			"success": False,
-			"message": str(e),
-			"blocking_rows": e.rows,
-		}
+		errors = [{"row": str(row["sr_no"]), "message": row["message"]} for row in e.rows]
+		return {"success": False, "errors": errors}
 
-	return {
-		"success": True,
-		"name": doc.name,
-		"workflow_state": doc.workflow_state,
-		"compliance_score": doc.compliance_score,
-		"total_checks": doc.total_checks,
-		"failed_checks": doc.failed_checks,
-	}
+	return {"success": True}
 
 
 @frappe.whitelist()
-def create_deviation(
-	date=None,
-	time=None,
-	shift_checklist=None,
-	outlet=None,
-	category=None,
-	severity=None,
-	issue=None,
-	action_taken=None,
-	photo=None,
-	escalated_to=None,
-):
-	"""Manual/ad-hoc deviation raise."""
+def verify_checklist(name):
+	"""Moves a Submitted (or Escalated-but-submitted) checklist to Verified.
+	The role check is enforced by ShiftChecklist.enforce_workflow_state_transition()
+	in validate() - not duplicated here.
+	"""
 	_check_auth()
 
-	if not issue:
-		frappe.throw(_("Issue description is required."))
+	doc = frappe.get_doc("Shift Checklist", name)
+	if doc.docstatus != 1:
+		frappe.throw(_("Only a submitted checklist can be verified."))
+
+	doc.workflow_state = "Verified"
+	doc.save()
+	return {"success": True}
+
+
+@frappe.whitelist()
+def create_deviation(outlet, category, severity, issue, action_taken, photo=None):
+	_check_auth()
+
+	if not (outlet and category and issue and action_taken):
+		frappe.throw(_("Outlet, category, issue and action taken are all required."))
+	if severity == "Critical" and not photo:
+		frappe.throw(_("A photo is required for critical deviations."))
 
 	doc = frappe.new_doc("Checklist Deviation")
-	doc.date = date or today()
-	doc.time = time
-	doc.shift_checklist = shift_checklist
+	doc.date = today()
+	doc.time = nowtime()
 	doc.outlet = outlet
 	doc.category = category
-	doc.severity = severity or "Medium"
+	doc.severity = severity
 	doc.issue = issue
 	doc.action_taken = action_taken
 	doc.photo = photo
-	doc.escalated_to = escalated_to
-	doc.insert()
+	if severity == "Critical":
+		# Frontend default was a placeholder "Area Manager" string; using
+		# the real Food Court Manager role instead so this also lines up
+		# with the Critical-deviation email notification (see
+		# checklist_deviation.py / the Notification fixture).
+		doc.escalated_to = "Food Court Manager"
 
-	return {"name": doc.name, "resolution_status": doc.resolution_status}
+	doc.insert()
+	return _serialize_deviation(doc)
 
 
 @frappe.whitelist()
-def update_deviation_status(name, resolution_status, closed_by=None):
+def update_deviation_status(name, resolution_status):
 	_check_auth()
 
 	doc = frappe.get_doc("Checklist Deviation", name)
 	doc.resolution_status = resolution_status
 	if resolution_status == "Closed":
-		doc.closed_by = closed_by or frappe.session.user
+		doc.closed_by = frappe.session.user
 		doc.closed_on = today()
+	else:
+		doc.closed_by = None
+		doc.closed_on = None
 	doc.save()
-
-	return {
-		"name": doc.name,
-		"resolution_status": doc.resolution_status,
-		"closed_by": doc.closed_by,
-		"closed_on": doc.closed_on,
-	}
+	return _serialize_deviation(doc)
 
 
-@frappe.whitelist()
-def get_deviations(outlet=None, resolution_status=None):
-	"""For the Kanban board."""
-	_check_auth()
-
-	filters = {}
-	if outlet:
-		filters["outlet"] = outlet
-	if resolution_status:
-		filters["resolution_status"] = resolution_status
-
-	return frappe.get_all(
-		"Checklist Deviation",
-		filters=filters,
-		fields=[
-			"name",
-			"date",
-			"time",
-			"shift_checklist",
-			"outlet",
-			"category",
-			"severity",
-			"issue",
-			"action_taken",
-			"escalated_to",
-			"resolution_status",
-			"closed_by",
-			"closed_on",
-			"docstatus",
-		],
-		order_by="date desc, creation desc",
-	)
+# ------------------------------- dashboard -----------------------------------
+# No date-range params - the frontend's getDashboardData() takes none, so
+# each helper below picks its own reporting window. Flagged as an
+# assumption: adjust the windows here if the product wants something
+# narrower/wider than "last 6 months" / "all time".
 
 
-@frappe.whitelist()
-def get_dashboard_data(report_type, from_date, to_date, outlet=None):
-	"""Single entry point for dashboard/report data.
-
-	report_type is one of:
-	  - compliance_trend               compliance % by outlet & month
-	  - deviations_by_outlet_category  deviation counts by outlet & category
-	  - open_vs_closed                 open vs closed deviation counts
-	  - vendor_scorecard               per-vendor pass/fail compliance %
-	  - repeat_failures                same check failing >3x/month, same outlet
-
-	The exact shape of each report_type is a proposed/assumed contract
-	(the brief asked to confirm this) - see the docstring on each
-	_report_* helper below for its return shape, and adjust freely once
-	the frontend's actual needs are known.
-	"""
-	_check_auth()
-
-	handlers = {
-		"compliance_trend": _report_compliance_trend,
-		"deviations_by_outlet_category": _report_deviations_by_outlet_category,
-		"open_vs_closed": _report_open_vs_closed,
-		"vendor_scorecard": _report_vendor_scorecard,
-		"repeat_failures": _report_repeat_failures,
-	}
-
-	handler = handlers.get(report_type)
-	if not handler:
-		frappe.throw(
-			_("Unknown report_type '{0}'. Valid options: {1}").format(
-				report_type, ", ".join(handlers.keys())
-			)
-		)
-
-	return handler(from_date, to_date, outlet)
-
-
-def _report_compliance_trend(from_date, to_date, outlet=None):
-	"""Returns {"report_type": ..., "data": [{outlet, month, avg_compliance}]}
-	one row per outlet per calendar month, averaged over submitted Shift
-	Checklists in range.
-	"""
-	conditions = ["docstatus = 1", "date between %(from_date)s and %(to_date)s"]
-	params = {"from_date": from_date, "to_date": to_date}
-	if outlet:
-		conditions.append("location = %(outlet)s")
-		params["outlet"] = outlet
-	where = " and ".join(conditions)
-
-	data = frappe.db.sql(
-		f"""
+def _dashboard_compliance_trend():
+	rows = frappe.db.sql(
+		"""
 		select
 			location as outlet,
-			date_format(date, '%%Y-%%m') as month,
-			avg(compliance_score) as avg_compliance
+			date_format(date, '%%b') as month,
+			date_format(date, '%%Y-%%m') as month_key,
+			avg(compliance_score) as compliance
 		from `tabShift Checklist`
-		where {where}
+		where docstatus = 1 and date >= date_sub(curdate(), interval 6 month)
 		group by location, date_format(date, '%%Y-%%m')
-		order by month
+		order by month_key
 		""",
-		params,
 		as_dict=True,
 	)
-	return {"report_type": "compliance_trend", "data": data}
-
-
-def _report_deviations_by_outlet_category(from_date, to_date, outlet=None):
-	"""Returns {"report_type": ..., "data": [{outlet, category, count}]}."""
-	conditions = ["date between %(from_date)s and %(to_date)s"]
-	params = {"from_date": from_date, "to_date": to_date}
-	if outlet:
-		conditions.append("outlet = %(outlet)s")
-		params["outlet"] = outlet
-	where = " and ".join(conditions)
-
-	data = frappe.db.sql(
-		f"""
-		select outlet, category, count(*) as count
-		from `tabChecklist Deviation`
-		where {where}
-		group by outlet, category
-		order by outlet, category
-		""",
-		params,
-		as_dict=True,
-	)
-	return {"report_type": "deviations_by_outlet_category", "data": data}
-
-
-def _report_open_vs_closed(from_date, to_date, outlet=None):
-	"""Returns {"report_type": ..., "open": n, "closed": n,
-	"by_status": [{resolution_status, count}]}.
-	"""
-	conditions = ["date between %(from_date)s and %(to_date)s"]
-	params = {"from_date": from_date, "to_date": to_date}
-	if outlet:
-		conditions.append("outlet = %(outlet)s")
-		params["outlet"] = outlet
-	where = " and ".join(conditions)
-
-	by_status = frappe.db.sql(
-		f"""
-		select resolution_status, count(*) as count
-		from `tabChecklist Deviation`
-		where {where}
-		group by resolution_status
-		""",
-		params,
-		as_dict=True,
-	)
-	closed = sum(row["count"] for row in by_status if row["resolution_status"] == "Closed")
-	open_count = sum(row["count"] for row in by_status if row["resolution_status"] != "Closed")
-
-	return {
-		"report_type": "open_vs_closed",
-		"open": open_count,
-		"closed": closed,
-		"by_status": by_status,
-	}
-
-
-def _report_vendor_scorecard(from_date, to_date, outlet=None):
-	"""Returns {"report_type": ..., "data": [{vendor, total_checks,
-	failed_checks, compliance_pct}]} for Shift Checklist Item rows with a
-	vendor set, from submitted Shift Checklists in range.
-	"""
-	conditions = [
-		"sci.vendor is not null",
-		"sci.vendor != ''",
-		"sc.date between %(from_date)s and %(to_date)s",
-		"sc.docstatus = 1",
+	return [
+		{"month": r["month"], "outlet": r["outlet"], "compliance": round(flt(r["compliance"]))}
+		for r in rows
 	]
-	params = {"from_date": from_date, "to_date": to_date}
-	if outlet:
-		conditions.append("sc.location = %(outlet)s")
-		params["outlet"] = outlet
-	where = " and ".join(conditions)
 
-	data = frappe.db.sql(
-		f"""
-		select
-			sci.vendor as vendor,
-			count(*) as total_checks,
-			sum(case when sci.status = 'Not OK' then 1 else 0 end) as failed_checks
-		from `tabShift Checklist Item` sci
-		inner join `tabShift Checklist` sc on sc.name = sci.parent
-		where {where}
-		group by sci.vendor
-		order by failed_checks desc
-		""",
-		params,
+
+def _dashboard_deviations_by_outlet():
+	categories = _get_category_options()
+
+	rows = frappe.db.sql(
+		"select outlet, category, count(*) as count from `tabChecklist Deviation` group by outlet, category",
 		as_dict=True,
 	)
-	for row in data:
-		row["compliance_pct"] = (
-			round(100 * (row["total_checks"] - row["failed_checks"]) / row["total_checks"], 2)
-			if row["total_checks"]
-			else 0
-		)
+	by_outlet = {}
+	for r in rows:
+		entry = by_outlet.setdefault(r["outlet"], {"outlet": r["outlet"]})
+		entry[r["category"]] = r["count"]
 
-	return {"report_type": "vendor_scorecard", "data": data}
+	result = []
+	for outlet, entry in by_outlet.items():
+		for category in categories:
+			entry.setdefault(category, 0)
+		result.append(entry)
+	return result
 
 
-def _report_repeat_failures(from_date, to_date, outlet=None):
-	"""Returns {"report_type": ..., "data": [{outlet, check_description,
-	month, failure_count}]} for checks that failed more than 3 times in the
-	same outlet in the same calendar month, from submitted Shift Checklists
-	in range.
+def _dashboard_vendor_scorecard():
+	"""Despite the name (inherited from the frontend type), this is an
+	outlet-level scorecard - matches how dashboards.tsx actually renders
+	it ("Outlet scorecard": outlet, compliance %, deviation count).
 	"""
-	conditions = [
-		"sci.status = 'Not OK'",
-		"sc.date between %(from_date)s and %(to_date)s",
-		"sc.docstatus = 1",
-	]
-	params = {"from_date": from_date, "to_date": to_date}
-	if outlet:
-		conditions.append("sc.location = %(outlet)s")
-		params["outlet"] = outlet
-	where = " and ".join(conditions)
+	compliance_rows = frappe.db.sql(
+		"""
+		select location as outlet, avg(compliance_score) as compliance
+		from `tabShift Checklist`
+		where docstatus = 1
+		group by location
+		""",
+		as_dict=True,
+	)
+	deviation_counts = frappe.db.sql(
+		"select outlet, count(*) as count from `tabChecklist Deviation` group by outlet",
+		as_dict=True,
+	)
+	dev_map = {r["outlet"]: r["count"] for r in deviation_counts}
 
-	data = frappe.db.sql(
-		f"""
+	return [
+		{
+			"outlet": r["outlet"],
+			"compliance": round(flt(r["compliance"])),
+			"deviations": dev_map.get(r["outlet"], 0),
+		}
+		for r in compliance_rows
+	]
+
+
+def _dashboard_repeat_failures():
+	"""The original brief's ">3 failures/month" threshold, adapted to the
+	frontend's flatter {check_description, outlet, fail_count} shape
+	(no month dimension) - counts total failures per check+outlet.
+	"""
+	return frappe.db.sql(
+		"""
 		select
-			sc.location as outlet,
 			sci.check_description as check_description,
-			date_format(sc.date, '%%Y-%%m') as month,
-			count(*) as failure_count
+			sc.location as outlet,
+			count(*) as fail_count
 		from `tabShift Checklist Item` sci
 		inner join `tabShift Checklist` sc on sc.name = sci.parent
-		where {where}
-		group by sc.location, sci.check_description, date_format(sc.date, '%%Y-%%m')
+		where sci.status = 'Not OK' and sc.docstatus = 1
+		group by sci.check_description, sc.location
 		having count(*) > 3
-		order by failure_count desc
+		order by fail_count desc
 		""",
-		params,
 		as_dict=True,
 	)
-	return {"report_type": "repeat_failures", "data": data}
+
+
+def _dashboard_escalations():
+	return {
+		"open": frappe.db.count("Checklist Deviation", {"resolution_status": ["!=", "Closed"]}),
+		"closed": frappe.db.count("Checklist Deviation", {"resolution_status": "Closed"}),
+	}

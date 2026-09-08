@@ -241,30 +241,73 @@ and populates the items table client-side — no save required first.
 Every method is `@frappe.whitelist()` and goes through `_check_auth()`.
 Responses are plain dicts/lists — no Frappe internals leak through.
 
-| Method | Purpose |
-|---|---|
-| `get_todays_checklists(supervisor=None)` | Today's Shift Checklists, optionally filtered by supervisor |
-| `get_checklist_detail(name)` | Full checklist with items, each row carrying its template context (standard, thresholds, mandatory/photo flags) |
-| `update_check_item(checklist, row_name, status=None, reading=None, remarks=None)` | Updates one row; stamps `checked_at`/`checked_by` server-side; returns live `compliance_score`/`failed_checks` |
-| `submit_checklist(name)` | Calls `doc.submit()`; on `ShiftChecklistValidationError`, reshapes the exception's own structured data into `{success: false, message, blocking_rows: [{row, message, ...}]}` — it does **not** run a second validation pass, `validate()` is the only place that logic lives |
-| `create_deviation(...)` | Manual/ad-hoc deviation raise |
-| `update_deviation_status(name, resolution_status, closed_by=None)` | Moves a deviation through resolution; stamps `closed_by`/`closed_on` on Closed |
-| `get_deviations(outlet=None, resolution_status=None)` | Feed for a Kanban-style deviation board |
-| `get_dashboard_data(report_type, from_date, to_date, outlet=None)` | Single reporting entry point, dispatching to one of 5 report types (below) |
+This API is written to match a specific, already-built frontend —
+[pixel-perfect](https://github.com/Vijay-micronxt/pixel-perfect), a
+Lovable-generated app whose `src/services/sopService.ts` and
+`src/services/types.ts` document the exact contract every screen is
+coded against (currently backed by in-memory mock data there; wiring it
+up to this API means swapping each function body in `sopService.ts` for
+a `fetch()`/`frappe.call()` to the matching method below — the frontend's
+own function names, parameters, and return shapes were the spec for
+this rewrite, not the other way around).
 
-### Dashboard report types
+| Frontend (`sopService.ts`) | Backend (`api.py`) | Notes |
+|---|---|---|
+| `listOutlets()` | `list_outlets()` | Active `Outlet` records |
+| `listCategories()` | `list_categories()` | Pulled live from the `category` Select's options — single source of truth |
+| `getTodayChecklists()` | `get_today_checklists()` | Full checklists (with items), not a summary list |
+| `getChecklist(name)` | `get_checklist(name)` | `None` if not found |
+| `getHistory(from, to)` | `get_history(from_date=None, to_date=None)` | Submitted checklists (any workflow state) in range |
+| `getVerificationQueue()` | `get_verification_queue()` | Submitted + not-yet-Verified (covers Escalated too) |
+| `getDeviations(outlet)` | `get_deviations(outlet=None)` | `"All"`/blank outlet means no filter |
+| `getDashboardData()` | `get_dashboard_data()` | One call, all five sections — see below |
+| `saveChecklistRow(name, sr_no, update)` | `save_checklist_row(checklist_name, sr_no, status=None, reading=None, remarks=None, attachment=None)` | Rows are identified by **`sr_no`**, not the child-row name; returns the **full** updated checklist |
+| `submitChecklist(name)` | `submit_checklist(name)` | `{success, errors?: [{row, message}]}`, `row` is `str(sr_no)` — reshapes `ShiftChecklistValidationError`, no second validation pass |
+| `verifyChecklist(name)` | `verify_checklist(name)` | New — the manager verify step happens via API now, not only via the Desk workflow button |
+| `createDeviation(input)` | `create_deviation(outlet, category, severity, issue, action_taken, photo=None)` | Critical severity auto-sets `escalated_to = "Food Court Manager"` |
+| `updateDeviationStatus(name, status)` | `update_deviation_status(name, resolution_status)` | Clears `closed_by`/`closed_on` when moved off Closed |
 
-Proposed shapes — flagged as an assumption pending confirmation of the
-frontend's exact needs; each is documented with its return shape as a
-docstring on the corresponding `_report_*` helper in `api.py`.
+A few deliberate departures from the app's original design, made to
+match this frontend's actual contract:
+- The doctype's own `status` field (Draft/In Progress/Completed/
+  Escalated) is **not** what the API reports. `get_today_checklists`
+  etc. compute a `status` string from `docstatus` + `workflow_state` +
+  whether any row has been touched, matching the frontend's
+  `ChecklistStatus` union (`Draft`/`In Progress`/`Submitted`/`Verified`/
+  `Escalated`) exactly.
+- `ShiftChecklist._compute_blocking_rows()` (in `shift_checklist.py`)
+  now also blocks submit on a mandatory row that has a status but is
+  incomplete for its input type (Numeric with no `reading`, Text with
+  no `remarks`, Photo with no `attachment`) — mirroring the frontend's
+  own `isRowComplete` check. This is new versus the original brief's two
+  rules (blank mandatory status; missing photo on a Not OK) and was
+  added so `submit_checklist`'s `errors` actually behave the way the
+  frontend expects; it's still the single source of truth, just a
+  broader one.
+- `checked_at`/deviation `time` are formatted down to `HH:MM` (matching
+  the frontend's display convention) rather than returned as full
+  Frappe datetime strings.
 
-| `report_type` | Returns |
-|---|---|
-| `compliance_trend` | Average compliance % per outlet per calendar month |
-| `deviations_by_outlet_category` | Deviation counts grouped by outlet & category |
-| `open_vs_closed` | Open vs closed deviation counts, plus a full breakdown by `resolution_status` |
-| `vendor_scorecard` | Per-vendor total/failed checks and compliance % |
-| `repeat_failures` | Checks failing more than 3×/month at the same outlet |
+### Dashboard data (`get_dashboard_data()`)
+
+One call, no parameters — a departure from the app's original
+per-report-type design, because that's what the frontend's contract
+calls for. Returns:
+
+| Key | Shape | Notes |
+|---|---|---|
+| `complianceTrend` | `[{month, outlet, compliance}]` | Last 6 months, submitted checklists only — window not configurable |
+| `deviationsByOutlet` | `[{outlet, <category>: count, ...}]` | Wide/pivoted, one key per **real** category (`Common Area`/`Hygiene`/`Vendor Compliance`/`Revenue`/`Safety`) |
+| `vendorScorecard` | `[{outlet, compliance, deviations}]` | Despite the name, this is outlet-level — matches how `dashboards.tsx` actually renders it ("Outlet scorecard") |
+| `repeatFailures` | `[{check_description, outlet, fail_count}]` | All-time count per check+outlet, `> 3` — the original brief's per-month window doesn't fit this flatter shape |
+| `escalations` | `{open, closed}` | Deviation counts by resolution status |
+
+**Frontend follow-up needed**: `dashboards.tsx`'s bar chart currently
+hardcodes `<Bar dataKey="Hygiene">`, `"Temperature"`, `"Safety"`,
+`"Documentation"` — placeholder category names from the mock data that
+don't match the doctype's real ones. It needs a small change to render
+bars dynamically from whatever keys `deviationsByOutlet` actually
+carries (or to hardcode the real 5 category names instead).
 
 ---
 
@@ -299,7 +342,15 @@ worth confirming against real requirements:
 - **Default severity "Medium"** for auto-raised deviations.
 - **Compliance score** excludes `NA` rows from the denominator.
 - **Deviation notification fires on insert**, not on submit.
-- **Dashboard report shapes** are a proposal, not a confirmed contract.
+- **Dashboard reporting windows** (last 6 months for the compliance
+  trend, all-time for everything else) are a pick, not a confirmed
+  spec — `get_dashboard_data()` takes no parameters because that's the
+  frontend's contract, so there's nowhere to pass a date range in from.
+- **Outlet-level "vendor" scorecard**: `vendorScorecard` groups by
+  outlet, not the `vendor` (Customer) field on Shift Checklist Item —
+  matches the frontend's actual "Outlet scorecard" card, but means the
+  per-vendor compliance view from the original brief doesn't have an
+  endpoint of its own yet.
 - **Workflow / Notification fixture schemas** were hand-written from
   framework knowledge without a live bench to verify field names against
   — double-check after the first `bench migrate` on your target version;

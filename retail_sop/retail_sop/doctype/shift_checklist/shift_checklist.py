@@ -146,28 +146,40 @@ class ShiftChecklist(Document):
 
 			if template_item.is_mandatory and not row.status:
 				blocking_rows.append(
-					{
-						"row": row.name,
-						"idx": row.idx,
-						"sr_no": row.sr_no,
-						"check_description": row.check_description,
-						"message": _("Mandatory check has no status."),
-					}
+					self._blocking_row(row, _("This mandatory check has not been marked yet."))
 				)
 				continue
 
 			if template_item.requires_photo and row.status == "Not OK" and not row.attachment:
 				blocking_rows.append(
-					{
-						"row": row.name,
-						"idx": row.idx,
-						"sr_no": row.sr_no,
-						"check_description": row.check_description,
-						"message": _("Photo required when marked Not OK."),
-					}
+					self._blocking_row(row, _("A photo is required when this check is marked Not OK."))
 				)
+				continue
+
+			# A mandatory row with a status set can still be incomplete for its
+			# input type - e.g. marked OK on a Numeric check with no reading
+			# entered. Mirrors the frontend's own isRowComplete check.
+			if template_item.is_mandatory:
+				incomplete = (
+					(template_item.input_type == "Numeric" and not row.reading)
+					or (template_item.input_type == "Text" and not row.remarks)
+					or (template_item.input_type == "Photo" and not row.attachment)
+				)
+				if incomplete:
+					blocking_rows.append(
+						self._blocking_row(row, _("Please complete the entry for this check."))
+					)
 
 		return blocking_rows
+
+	def _blocking_row(self, row, message):
+		return {
+			"row": row.name,
+			"idx": row.idx,
+			"sr_no": row.sr_no,
+			"check_description": row.check_description,
+			"message": message,
+		}
 
 	# ------------------------------------------------------------------
 	# Escalation on submit
