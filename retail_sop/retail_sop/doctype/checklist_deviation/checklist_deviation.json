@@ -120,6 +120,7 @@
    "label": "Resolution"
   },
   {
+   "allow_on_submit": 1,
    "default": "Open",
    "fieldname": "resolution_status",
    "fieldtype": "Select",
@@ -129,6 +130,7 @@
    "options": "Open\nIn Progress\nPending Vendor\nClosed"
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "closed_by",
    "fieldtype": "Link",
    "label": "Closed By",
@@ -136,6 +138,7 @@
    "read_only": 1
   },
   {
+   "allow_on_submit": 1,
    "fieldname": "closed_on",
    "fieldtype": "Date",
    "label": "Closed On",
