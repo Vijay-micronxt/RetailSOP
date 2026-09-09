@@ -366,6 +366,28 @@ def get_my_store_checklists():
 
 
 @frappe.whitelist()
+def get_my_store_history(from_date=None, to_date=None, limit=50, offset=0):
+	"""Submitted Shift Checklist history for the single Outlet the calling
+	user is the store_operator of - the Store Operator equivalent of
+	get_history(), scoped to their one store instead of every outlet.
+	Throws if the account isn't linked to a store.
+	"""
+	_check_auth()
+
+	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
+	if not outlet:
+		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+
+	conditions = [["location", "=", outlet], ["docstatus", "=", 1]]
+	if from_date:
+		conditions.append(["date", ">=", from_date])
+	if to_date:
+		conditions.append(["date", "<=", to_date])
+	names = _get_checklist_names(conditions, "date desc", limit, offset)
+	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+
+
+@frappe.whitelist()
 def get_dashboard_data():
 	_check_auth()
 	_check_staff_role()
