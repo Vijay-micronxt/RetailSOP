@@ -79,18 +79,24 @@ def login(usr, pwd, device_id, device_name=None):
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def forgot_password(usr):
-	"""Triggers Frappe's own built-in password-reset email flow - same
-	"never roll your own" reasoning as login()'s use of check_password().
-	Reuses frappe.core.doctype.user.user.reset_password(), which generates
-	a one-time key on the User record and emails a reset link the
-	frontend doesn't need to build any part of.
+	"""Generates a one-time password-reset key using Frappe's own User
+	document method (same "never roll your own" reasoning as login()'s
+	use of check_password() - key generation/storage is exactly the
+	security-sensitive part not worth reinventing), but sends our own
+	email instead of Frappe's default one.
 
-	Completing the reset is Frappe's own existing endpoint too, called
-	directly by the frontend - no wrapper needed here:
-	frappe.core.doctype.user.user.update_password(new_password, key=<key
-	from the emailed link>). Once that succeeds, the account's password
-	is updated and login() works immediately with the new password - both
-	check the same underlying password hash.
+	Frappe's own reset_password() sends an email with a clickable link to
+	its own Desk-styled /update-password web page - fine for the normal
+	Desk login flow, wrong for this app, which should never send a user
+	out to that page. send_email=False skips that email; a plain reset
+	*code* is sent instead, for the frontend's own password-reset screen
+	to collect (not a link to click).
+
+	Completing the reset still uses Frappe's existing endpoint directly,
+	unchanged - no wrapper needed:
+	frappe.core.doctype.user.user.update_password(new_password, key=<the
+	code emailed below>). It checks the same reset_password_key field
+	this sets, regardless of how that field got set.
 
 	Always returns {"success": True} regardless of whether the account
 	exists, is enabled, or is allowed to use this app - so this can't be
@@ -103,9 +109,17 @@ def forgot_password(usr):
 	if frappe.db.exists("User", usr):
 		user_doc = frappe.get_cached_doc("User", usr)
 		if user_doc.enabled and set(frappe.get_roles(usr)) & ALLOWED_ROLES:
-			from frappe.core.doctype.user.user import reset_password
-
-			reset_password(user=usr)
+			key = user_doc.reset_password(send_email=False)
+			frappe.sendmail(
+				recipients=[usr],
+				subject=_("Your password reset code"),
+				message=_(
+					"You requested a password reset.<br><br>"
+					"Your reset code is: <b>{0}</b><br><br>"
+					"Enter this code in the app to set a new password. "
+					"If you didn't request this, you can ignore this email."
+				).format(key),
+			)
 
 	return {"success": True}
 
