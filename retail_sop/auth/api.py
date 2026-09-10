@@ -181,12 +181,17 @@ def logout_all():
 	"""Requires an authenticated request (a valid Authorization header
 	already processed by the before_request hook) - not allow_guest.
 	"""
-	frappe.db.set_value(
+	# See the matching comment in reset_password() - a filter-dict
+	# frappe.db.set_value() call mishandles a datetime value on this
+	# Frappe version, so this fetches matching names first and updates
+	# each individually instead.
+	session_names = frappe.get_all(
 		"Auth Session",
-		{"user": frappe.session.user, "revoked_at": ["is", "not set"]},
-		"revoked_at",
-		now_datetime(),
+		filters={"user": frappe.session.user, "revoked_at": ["is", "not set"]},
+		pluck="name",
 	)
+	for session_name in session_names:
+		frappe.db.set_value("Auth Session", session_name, "revoked_at", now_datetime())
 	return {"success": True}
 
 
@@ -363,11 +368,16 @@ def reset_password(email, token, new_password):
 	request.save(ignore_permissions=True)
 
 	# Password just changed - force re-login everywhere, same as logout_all().
-	frappe.db.set_value(
-		"Auth Session",
-		{"user": user, "revoked_at": ["is", "not set"]},
-		"revoked_at",
-		now_datetime(),
+	# frappe.db.set_value() with a filter dict (rather than a single
+	# docname) mishandles a datetime value on this Frappe version - it
+	# reaches MariaDB as an empty string instead, which the column rejects
+	# (OperationalError 1292). Fetching the matching names first and
+	# updating each individually uses the same single-docname form already
+	# proven reliable elsewhere in this file (see refresh_token() above).
+	session_names = frappe.get_all(
+		"Auth Session", filters={"user": user, "revoked_at": ["is", "not set"]}, pluck="name"
 	)
+	for session_name in session_names:
+		frappe.db.set_value("Auth Session", session_name, "revoked_at", now_datetime())
 
 	return {"success": True}
