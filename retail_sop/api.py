@@ -50,6 +50,20 @@ def _check_auth():
 		frappe.throw(_("Authentication required"), frappe.AuthenticationError)
 
 
+def _check_staff_role():
+	"""Blocks the Supervisor/Manager checklist-listing endpoints from a
+	Store Operator caller. frappe.get_all() (used throughout this module)
+	does not enforce Frappe's permission engine on its own - and Store
+	Operator deliberately has zero doctype-level permission on Shift
+	Checklist, relying only on get_my_store_summary()'s manual outlet
+	check - so without this, a Store Operator account can see every
+	outlet's checklists through these endpoints instead of being blocked.
+	"""
+	roles = set(frappe.get_roles(frappe.session.user))
+	if not roles & {"Food Court Supervisor", "Food Court Manager", "System Manager"}:
+		frappe.throw(_("Not permitted."), frappe.PermissionError)
+
+
 def _format_time(value):
 	"""HH:MM, matching the frontend's display convention. Accepts a
 	Datetime, Time (timedelta/str), or plain string value."""
@@ -91,8 +105,21 @@ def _get_category_options():
 def _serialize_checklist(doc):
 	items = []
 	for row in doc.items:
+		# frappe.get_cached_doc() loads a full Document, which triggers
+		# Frappe's permission engine - and Checklist Template Item is a
+		# child-table doctype with no permissions of its own (it can only
+		# normally be reached through its parent Checklist Template), so
+		# that check fails with "Please specify a valid parent DocType"
+		# for any non-Administrator caller. frappe.db.get_value() is a raw
+		# field read with no Document-level permission check, which is all
+		# we need here - we only read a few fields, never write.
 		template_item = (
-			frappe.get_cached_doc("Checklist Template Item", row.template_item)
+			frappe.db.get_value(
+				"Checklist Template Item",
+				row.template_item,
+				["input_type", "min_value", "max_value", "is_mandatory", "requires_photo"],
+				as_dict=True,
+			)
 			if row.template_item
 			else None
 		)
@@ -149,69 +176,99 @@ def _serialize_deviation(doc):
 	}
 
 
-def _get_checklist_names(conditions, order_by):
-	return frappe.get_all("Shift Checklist", filters=conditions, pluck="name", order_by=order_by)
+def _get_checklist_names(conditions, order_by, limit=None, offset=None):
+	kwargs = {}
+	if limit:
+		kwargs["limit_page_length"] = cint(limit)
+	if offset:
+		kwargs["limit_start"] = cint(offset)
+	return frappe.get_all("Shift Checklist", filters=conditions, pluck="name", order_by=order_by, **kwargs)
 
 
 # ---------------------------------- reads -----------------------------------
 
 
 @frappe.whitelist()
-def list_outlets():
+def list_outlets(limit=None, offset=None):
 	_check_auth()
-	return frappe.get_all("Outlet", filters={"active": 1}, pluck="outlet_name", order_by="outlet_name")
+	kwargs = {}
+	if limit:
+		kwargs["limit_page_length"] = cint(limit)
+	if offset:
+		kwargs["limit_start"] = cint(offset)
+	return frappe.get_all(
+		"Outlet", filters={"active": 1}, pluck="outlet_name", order_by="outlet_name", **kwargs
+	)
 
 
 @frappe.whitelist()
-def list_categories():
+def list_categories(limit=None, offset=None):
 	_check_auth()
-	return _get_category_options()
+	kwargs = {}
+	if limit:
+		kwargs["limit_page_length"] = cint(limit)
+	if offset:
+		kwargs["limit_start"] = cint(offset)
+	return frappe.get_all(
+		"Checklist Category", filters={"active": 1}, pluck="name", order_by="name", **kwargs
+	)
 
 
 @frappe.whitelist()
-def get_today_checklists():
+def get_today_checklists(limit=None, offset=None):
 	_check_auth()
-	names = _get_checklist_names([["date", "=", today()], ["docstatus", "!=", 2]], "creation desc")
+	_check_staff_role()
+	names = _get_checklist_names(
+		[["date", "=", today()], ["docstatus", "!=", 2]], "creation desc", limit, offset
+	)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
 
 @frappe.whitelist()
 def get_checklist(name):
 	_check_auth()
+	_check_staff_role()
 	if not frappe.db.exists("Shift Checklist", name):
 		return None
 	return _serialize_checklist(frappe.get_doc("Shift Checklist", name))
 
 
 @frappe.whitelist()
-def get_history(from_date=None, to_date=None):
+def get_history(from_date=None, to_date=None, limit=50, offset=0):
 	_check_auth()
+	_check_staff_role()
 	conditions = [["docstatus", "=", 1]]
 	if from_date:
 		conditions.append(["date", ">=", from_date])
 	if to_date:
 		conditions.append(["date", "<=", to_date])
-	names = _get_checklist_names(conditions, "date desc")
+	names = _get_checklist_names(conditions, "date desc", limit, offset)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
 
 @frappe.whitelist()
-def get_verification_queue():
+def get_verification_queue(limit=50, offset=0):
 	_check_auth()
+	_check_staff_role()
 	names = _get_checklist_names(
-		[["docstatus", "=", 1], ["workflow_state", "!=", "Verified"]], "date asc"
+		[["docstatus", "=", 1], ["workflow_state", "!=", "Verified"]], "date asc", limit, offset
 	)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
 
 @frappe.whitelist()
-def get_deviations(outlet=None):
+def get_deviations(outlet=None, limit=50, offset=0):
 	_check_auth()
 	filters = {}
 	if outlet and outlet != "All":
 		filters["outlet"] = outlet
+	kwargs = {}
+	if limit:
+		kwargs["limit_page_length"] = cint(limit)
+	if offset:
+		kwargs["limit_start"] = cint(offset)
 	names = frappe.get_all(
-		"Checklist Deviation", filters=filters, pluck="name", order_by="date desc, creation desc"
+		"Checklist Deviation", filters=filters, pluck="name", order_by="date desc, creation desc", **kwargs
 	)
 	return [_serialize_deviation(frappe.get_doc("Checklist Deviation", n)) for n in names]
 
@@ -224,6 +281,49 @@ def get_deviations(outlet=None):
 # engine - is what limits access; ignore_permissions=True is used
 # accordingly, the same way other endpoints in this file already use it for
 # writes.
+
+
+def _get_my_outlet():
+	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
+	if not outlet:
+		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+	return outlet
+
+
+@frappe.whitelist()
+def get_my_outlet():
+	"""The single Outlet the calling user is tagged as Store Operator for.
+	Lets the frontend skip an outlet picker (e.g. on the Raise Deviation
+	screen) instead of showing every outlet in the system to someone who
+	only has one.
+	"""
+	_check_auth()
+	return {"outlet": _get_my_outlet()}
+
+
+@frappe.whitelist()
+def get_my_deviations(limit=50, offset=0):
+	"""Checklist Deviations for the single Outlet the calling user is the
+	store_operator of - the Store Operator equivalent of get_deviations(),
+	scoped to their one store instead of every outlet.
+	"""
+	_check_auth()
+
+	outlet = _get_my_outlet()
+	kwargs = {}
+	if limit:
+		kwargs["limit_page_length"] = cint(limit)
+	if offset:
+		kwargs["limit_start"] = cint(offset)
+	names = frappe.get_all(
+		"Checklist Deviation",
+		filters={"outlet": outlet},
+		pluck="name",
+		order_by="date desc, creation desc",
+		ignore_permissions=True,
+		**kwargs,
+	)
+	return [_serialize_deviation(frappe.get_doc("Checklist Deviation", n)) for n in names]
 
 
 @frappe.whitelist()
@@ -283,8 +383,57 @@ def get_my_store_summary():
 
 
 @frappe.whitelist()
+def get_my_store_checklists():
+	"""Today's Shift Checklists for the single Outlet the calling user is
+	the store_operator of - the Store Operator equivalent of
+	get_today_checklists(), scoped to their one store instead of every
+	outlet. Throws if the account isn't linked to a store. Unlike
+	get_my_store_summary() this returns full checklist detail (all
+	categories, not just Hygiene), since seeing and filling in their own
+	store's checklist is the actual point of this endpoint.
+	"""
+	_check_auth()
+
+	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
+	if not outlet:
+		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+
+	names = frappe.get_all(
+		"Shift Checklist",
+		filters={"location": outlet, "date": today(), "docstatus": ["!=", 2]},
+		pluck="name",
+		order_by="creation desc",
+		ignore_permissions=True,
+	)
+	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+
+
+@frappe.whitelist()
+def get_my_store_history(from_date=None, to_date=None, limit=50, offset=0):
+	"""Submitted Shift Checklist history for the single Outlet the calling
+	user is the store_operator of - the Store Operator equivalent of
+	get_history(), scoped to their one store instead of every outlet.
+	Throws if the account isn't linked to a store.
+	"""
+	_check_auth()
+
+	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
+	if not outlet:
+		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+
+	conditions = [["location", "=", outlet], ["docstatus", "=", 1]]
+	if from_date:
+		conditions.append(["date", ">=", from_date])
+	if to_date:
+		conditions.append(["date", "<=", to_date])
+	names = _get_checklist_names(conditions, "date desc", limit, offset)
+	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+
+
+@frappe.whitelist()
 def get_dashboard_data():
 	_check_auth()
+	_check_staff_role()
 	return {
 		"complianceTrend": _dashboard_compliance_trend(),
 		"deviationsByOutlet": _dashboard_deviations_by_outlet(),
