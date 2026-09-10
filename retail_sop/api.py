@@ -283,6 +283,49 @@ def get_deviations(outlet=None, limit=50, offset=0):
 # writes.
 
 
+def _get_my_outlet():
+	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
+	if not outlet:
+		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+	return outlet
+
+
+@frappe.whitelist()
+def get_my_outlet():
+	"""The single Outlet the calling user is tagged as Store Operator for.
+	Lets the frontend skip an outlet picker (e.g. on the Raise Deviation
+	screen) instead of showing every outlet in the system to someone who
+	only has one.
+	"""
+	_check_auth()
+	return {"outlet": _get_my_outlet()}
+
+
+@frappe.whitelist()
+def get_my_deviations(limit=50, offset=0):
+	"""Checklist Deviations for the single Outlet the calling user is the
+	store_operator of - the Store Operator equivalent of get_deviations(),
+	scoped to their one store instead of every outlet.
+	"""
+	_check_auth()
+
+	outlet = _get_my_outlet()
+	kwargs = {}
+	if limit:
+		kwargs["limit_page_length"] = cint(limit)
+	if offset:
+		kwargs["limit_start"] = cint(offset)
+	names = frappe.get_all(
+		"Checklist Deviation",
+		filters={"outlet": outlet},
+		pluck="name",
+		order_by="date desc, creation desc",
+		ignore_permissions=True,
+		**kwargs,
+	)
+	return [_serialize_deviation(frappe.get_doc("Checklist Deviation", n)) for n in names]
+
+
 @frappe.whitelist()
 def get_my_store_summary():
 	"""Hygiene checks + an overall rating for the single Outlet the calling
