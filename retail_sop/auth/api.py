@@ -78,6 +78,39 @@ def login(usr, pwd, device_id, device_name=None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
+def forgot_password(usr):
+	"""Triggers Frappe's own built-in password-reset email flow - same
+	"never roll your own" reasoning as login()'s use of check_password().
+	Reuses frappe.core.doctype.user.user.reset_password(), which generates
+	a one-time key on the User record and emails a reset link the
+	frontend doesn't need to build any part of.
+
+	Completing the reset is Frappe's own existing endpoint too, called
+	directly by the frontend - no wrapper needed here:
+	frappe.core.doctype.user.user.update_password(new_password, key=<key
+	from the emailed link>). Once that succeeds, the account's password
+	is updated and login() works immediately with the new password - both
+	check the same underlying password hash.
+
+	Always returns {"success": True} regardless of whether the account
+	exists, is enabled, or is allowed to use this app - so this can't be
+	used to discover valid usernames/emails on this (shared, multi-app)
+	site.
+	"""
+	if not usr:
+		frappe.throw(_("usr is required."))
+
+	if frappe.db.exists("User", usr):
+		user_doc = frappe.get_cached_doc("User", usr)
+		if user_doc.enabled and set(frappe.get_roles(usr)) & ALLOWED_ROLES:
+			from frappe.core.doctype.user.user import reset_password
+
+			reset_password(user=usr)
+
+	return {"success": True}
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 def refresh_token(refresh_token):
 	if not refresh_token:
 		frappe.throw(_("refresh_token is required."))
