@@ -298,12 +298,19 @@ def _try_send_reset_email(email):
 		return
 
 	# Only the newest link should ever work.
-	frappe.db.set_value(
+	# frappe.db.set_value() with a filter dict (rather than a single
+	# docname) mishandles a datetime value on this Frappe version - it
+	# reaches MariaDB as an empty string instead, which the column rejects
+	# (OperationalError 1292). Fetching the matching names first and
+	# updating each individually uses the same single-docname form already
+	# proven reliable elsewhere in this file (see refresh_token() above).
+	stale_request_names = frappe.get_all(
 		"Password Reset Request",
-		{"user": user, "used_at": ["is", "not set"]},
-		"expires_at",
-		now_datetime(),
+		filters={"user": user, "used_at": ["is", "not set"]},
+		pluck="name",
 	)
+	for stale_request_name in stale_request_names:
+		frappe.db.set_value("Password Reset Request", stale_request_name, "expires_at", now_datetime())
 
 	raw_token = generate_opaque_token()
 	request = frappe.new_doc("Password Reset Request")
