@@ -80,7 +80,8 @@ retail_sop/
     │   ├── checklist_template/            (+ checklist_template_item, child table)
     │   ├── shift_checklist/               (+ shift_checklist_item, child table)
     │   ├── checklist_deviation/
-    │   └── auth_session/                  # one row per logged-in device/session (see §12)
+    │   ├── auth_session/                  # one row per logged-in device/session (see §12)
+    │   └── password_reset_request/        # one row per issued reset link (see §12)
     └── workspace/retail_sop/retail_sop.json   # home screen menu (see §11)
 ```
 
@@ -540,6 +541,50 @@ plain `@frappe.whitelist()`.
 | `logout(refresh_token)` | Revokes the matching session; always returns `{success: true}` regardless of whether the token was recognized, so it never leaks that information |
 | `logout_all()` | Revokes every non-revoked `Auth Session` for `frappe.session.user` |
 | `me()` | Returns the same user-profile shape as `login`, for a silent session restore on app boot |
+| `forgot_password(email)` | See "Forgot/reset password" below. Always `{success: true}` |
+| `check_reset_token(email, token)` | Read-only pre-check, `{valid: bool}` — no side effects |
+| `reset_password(email, token, new_password)` | See below |
+
+### Forgot/reset password
+
+Deliberately **not** `frappe.core.doctype.user.user.reset_password()` —
+that emails a link to Frappe's own `/update-password` Desk page, which
+this app's users (SPA-only, several with `desk_access: 0`) should never
+land on. Same token-hash-only philosophy as the refresh token above, via
+its own doctype:
+[`Password Reset Request`](retail_sop/retail_sop/doctype/password_reset_request/)
+(`user`, `token_hash` unique, `created_at`, `expires_at`, `used_at`;
+random-named, System Manager only, same as `Auth Session`).
+
+1. `forgot_password(email)` looks up the account (`_find_user_by_email` —
+   tries `email` as the User name first, falls back to a lookup on the
+   `email` field), and does nothing further unless it's enabled and holds
+   an `ALLOWED_ROLES` role — but **always returns `{success: true}`**
+   either way, and any error (including a missing `retail_sop_frontend_url`,
+   see Setup) is caught and logged rather than surfaced, so a guest caller
+   can never distinguish "no such account" from "email sent" from
+   "something broke" by response alone. When it does find a valid account:
+   invalidates that user's other unused reset requests (only the newest
+   link should ever work), skips sending if one was already issued in the
+   last 60 seconds (double-click/retry guard), then creates a new
+   `Password Reset Request` and emails a link to
+   `{retail_sop_frontend_url}/reset-password?token=...&email=...` — a
+   route on *this app's own frontend*, valid for `PASSWORD_RESET_TTL_MINUTES`
+   (60, hardcoded in `auth/api.py`).
+2. `check_reset_token(email, token)` — the frontend calls this on that
+   page's load, to show "this link is invalid or expired" immediately
+   rather than only after the user fills in a new password.
+3. `reset_password(email, token, new_password)` re-validates the token
+   (unused + unexpired), sets the password via `User.new_password` +
+   `save()` — the same mechanism Desk's own "Set New Password" and
+   Frappe's default reset flow use, so the site's password policy and
+   hashing are reused rather than reimplemented — marks the request used,
+   and revokes every `Auth Session` for that user (same as `logout_all()`)
+   since the password just changed.
+
+Sending the email itself is plain `frappe.sendmail()` — it uses whatever
+outgoing Email Account the site already has configured as default; this
+app doesn't add or require anything beyond standard Frappe email setup.
 
 **Refresh rotation + reuse/replay detection** — the security-sensitive
 part, verified in isolation against the exact scenarios below before
@@ -627,6 +672,19 @@ request regardless of a valid token unless CORS is enabled:
 ```bash
 bench --site your-site set-config allow_cors "https://your-frontend-origin.example.com"
 ```
+
+**Required for forgot/reset password to work at all** — where the
+frontend's own `/reset-password` page lives, so `forgot_password()` has
+something to build a link to:
+```bash
+bench --site your-site set-config retail_sop_frontend_url "https://your-frontend-origin.example.com"
+```
+If it's missing, `forgot_password()` still returns `{success: true}` (see
+above for why) but never actually sends an email — check the Error Log
+for "retail_sop: forgot_password error" if reset emails aren't arriving.
+Also needs the site to have a default outgoing Email Account configured
+(standard Frappe setup, unrelated to this app) — same failure mode if
+that's missing instead.
 
 ### Troubleshooting
 

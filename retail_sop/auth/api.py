@@ -11,7 +11,16 @@ Two token types:
   - refresh_token: an opaque random string, never a JWT. Only its sha256
     hash is ever persisted; the raw value is returned to the client once
     and never stored server-side.
+
+Forgot/reset password (forgot_password/check_reset_token/reset_password)
+follows the same "never touch Frappe's own Desk flow" philosophy: it
+issues and validates its own opaque, hash-only-stored tokens (Password
+Reset Request doctype, same pattern as the refresh token above) and emails
+a link to this app's own frontend route, not frappe.core's
+/update-password page.
 """
+
+from urllib.parse import quote
 
 import frappe
 from frappe import _
@@ -20,6 +29,13 @@ from frappe.utils.password import check_password
 
 from retail_sop.auth.jwt_utils import encode_access_token, refresh_token_ttl_days
 from retail_sop.auth.utils import build_user_profile, generate_opaque_token, hash_token
+
+# How long a password reset link stays valid for.
+PASSWORD_RESET_TTL_MINUTES = 60
+
+# Where reset-link emails point - this app's own frontend, never Frappe's
+# default /update-password page (see forgot_password() below).
+CONF_FRONTEND_URL = "retail_sop_frontend_url"
 
 # This app's own "is this account allowed to use this app" gate - the
 # staff roles that may hold an Auth Session, plus System Manager as an
@@ -180,3 +196,178 @@ def me():
 	restore on app boot. Requires an authenticated request.
 	"""
 	return build_user_profile(frappe.session.user)
+
+
+def _get_frontend_url():
+	url = frappe.conf.get(CONF_FRONTEND_URL)
+	if not url:
+		frappe.throw(
+			f"The frontend's URL is not configured. Set `{CONF_FRONTEND_URL}` in "
+			"site_config.json so password reset emails link back to the app "
+			"instead of failing to build a link at all."
+		)
+	return url.rstrip("/")
+
+
+def _find_user_by_email(email):
+	if not email:
+		return None
+	email = email.strip()
+	# User.name usually *is* the email, but isn't guaranteed to be - fall
+	# back to a lookup on the `email` field for accounts named differently.
+	if frappe.db.exists("User", email):
+		return email
+	return frappe.db.get_value("User", {"email": email}, "name")
+
+
+def _resolve_reset_request(email, token):
+	"""Returns the still-valid, unused Password Reset Request doc matching
+	this email+token pair, or None. Read-only - does not consume the token.
+	"""
+	user = _find_user_by_email(email)
+	if not (user and token):
+		return None
+
+	request_name = frappe.db.get_value(
+		"Password Reset Request",
+		{"user": user, "token_hash": hash_token(token), "used_at": ["is", "not set"]},
+		"name",
+	)
+	if not request_name:
+		return None
+
+	request = frappe.get_doc("Password Reset Request", request_name)
+	if now_datetime() > get_datetime(request.expires_at):
+		return None
+
+	return request
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def forgot_password(email):
+	"""Always returns {"success": True}, whether or not an account exists
+	for `email` - an unauthenticated caller must never be able to tell
+	account existence apart from a miss (that's also why any failure below
+	is swallowed rather than surfaced as an error response).
+
+	If `email` matches an enabled, app-permitted account, emails it a link
+	to *this app's own* /reset-password page (retail_sop_frontend_url),
+	never Frappe's default /update-password page - the whole point of this
+	endpoint over frappe.core's built-in reset_password().
+	"""
+	try:
+		_try_send_reset_email(email)
+	except Exception:
+		# Same fail-safe philosophy as auth/middleware.py: a bug or a
+		# missing site_config key here must never leak account existence
+		# (a 500 here vs the normal 200 would do exactly that) or crash the
+		# request - log it, return success either way.
+		frappe.log_error(title="retail_sop: forgot_password error")
+
+	return {"success": True}
+
+
+def _try_send_reset_email(email):
+	user = _find_user_by_email(email)
+	if not user:
+		return
+
+	user_doc = frappe.get_cached_doc("User", user)
+	if not user_doc.enabled:
+		return
+	if not set(frappe.get_roles(user)) & ALLOWED_ROLES:
+		return
+
+	# Already have a live, unused link from the last minute - don't spam a
+	# fresh email (and token) on every double-click/retry.
+	recent = frappe.db.get_value(
+		"Password Reset Request",
+		{
+			"user": user,
+			"used_at": ["is", "not set"],
+			"created_at": [">", add_to_date(now_datetime(), seconds=-60)],
+		},
+		"name",
+	)
+	if recent:
+		return
+
+	# Only the newest link should ever work.
+	frappe.db.set_value(
+		"Password Reset Request",
+		{"user": user, "used_at": ["is", "not set"]},
+		"expires_at",
+		now_datetime(),
+	)
+
+	raw_token = generate_opaque_token()
+	request = frappe.new_doc("Password Reset Request")
+	request.user = user
+	request.token_hash = hash_token(raw_token)
+	request.created_at = now_datetime()
+	request.expires_at = add_to_date(now_datetime(), minutes=PASSWORD_RESET_TTL_MINUTES)
+	request.insert(ignore_permissions=True)
+
+	reset_link = (
+		f"{_get_frontend_url()}/reset-password"
+		f"?token={quote(raw_token)}&email={quote(user_doc.email or user)}"
+	)
+
+	message = (
+		f"Hi {user_doc.full_name or user},<br><br>"
+		"Someone requested a password reset for your Retail SOP account. "
+		"If this was you, click the link below to set a new password "
+		f"(valid for {PASSWORD_RESET_TTL_MINUTES} minutes):<br><br>"
+		f'<a href="{reset_link}">{reset_link}</a><br><br>'
+		"If you didn't request this, you can safely ignore this email - "
+		"your password hasn't changed."
+	)
+
+	frappe.sendmail(
+		recipients=[user_doc.email or user],
+		subject=_("Reset your Retail SOP password"),
+		message=message,
+		now=True,
+	)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def check_reset_token(email, token):
+	"""Read-only pre-check so the frontend can show "this link is invalid
+	or has expired" immediately on page load, before the user fills in a
+	new password - rather than only discovering that on submit.
+	"""
+	return {"valid": bool(_resolve_reset_request(email, token))}
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def reset_password(email, token, new_password):
+	if not (email and token and new_password):
+		frappe.throw(_("email, token and new_password are all required."))
+
+	request = _resolve_reset_request(email, token)
+	if not request:
+		frappe.throw(_("This reset link is invalid or has expired."), frappe.AuthenticationError)
+
+	user = request.user
+
+	# .new_password is Frappe's own mechanism (same one Desk's "Set New
+	# Password" and the default reset-password page use) - it re-runs the
+	# site's password policy and handles hashing; reset_password() doesn't
+	# reinvent either.
+	user_doc = frappe.get_doc("User", user)
+	user_doc.new_password = new_password
+	user_doc.save(ignore_permissions=True)
+
+	request.used_at = now_datetime()
+	request.save(ignore_permissions=True)
+
+	# Password just changed - force re-login everywhere, same as logout_all().
+	frappe.db.set_value(
+		"Auth Session",
+		{"user": user, "revoked_at": ["is", "not set"]},
+		"revoked_at",
+		now_datetime(),
+	)
+
+	return {"success": True}
