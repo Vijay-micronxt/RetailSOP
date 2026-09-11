@@ -4,7 +4,7 @@
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt, getdate, now_datetime, nowdate
+from frappe.utils import flt, get_datetime, getdate, now_datetime, nowdate
 
 
 class ShiftChecklistValidationError(frappe.ValidationError):
@@ -29,6 +29,7 @@ class ShiftChecklist(Document):
 		self.compute_summary()
 
 		if self.docstatus == 1:
+			self.enforce_not_missed()
 			self.enforce_submit_rules()
 
 	def on_submit(self):
@@ -123,6 +124,22 @@ class ShiftChecklist(Document):
 		applicable = [row for row in self.items if row.status and row.status != "NA"]
 		ok_count = len([row for row in applicable if row.status == "OK"])
 		self.compliance_score = flt((ok_count / len(applicable)) * 100, 2) if applicable else 0.0
+
+	# ------------------------------------------------------------------
+	# Cutoff enforcement - a checklist whose Checklist Template set a
+	# cutoff_time cannot be submitted after that time has passed, even if
+	# every row is otherwise complete. Once missed, it stays missed - the
+	# record itself is never deleted, it just can never move past Draft.
+	# ------------------------------------------------------------------
+	def enforce_not_missed(self):
+		if not self.cutoff_time:
+			return
+		if now_datetime() > get_datetime(f"{self.date} {self.cutoff_time}"):
+			frappe.throw(
+				_(
+					"The cutoff time for this checklist ({0}) has passed - it is marked Missed and can no longer be submitted."
+				).format(self.cutoff_time)
+			)
 
 	# ------------------------------------------------------------------
 	# Submit-time blocking rules

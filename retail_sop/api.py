@@ -78,13 +78,15 @@ def _format_time(value):
 
 def _computed_status(doc):
 	"""Maps our docstatus/workflow_state onto the frontend's ChecklistStatus
-	union (Draft/In Progress/Submitted/Verified/Escalated) - the doctype's
-	own `status` field is kept for internal/Desk bookkeeping only and is
-	not the source of truth for what the API reports.
+	union (Draft/In Progress/Missed/Submitted/Verified/Escalated) - the
+	doctype's own `status` field is kept for internal/Desk bookkeeping only
+	and is not the source of truth for what the API reports.
 	"""
 	if doc.docstatus == 2:
 		return "Draft"
 	if doc.docstatus == 0:
+		if doc.cutoff_time and now_datetime() > get_datetime(f"{doc.date} {doc.cutoff_time}"):
+			return "Missed"
 		return "In Progress" if any(row.status for row in doc.items) else "Draft"
 	if doc.workflow_state == "Verified":
 		return "Verified"
@@ -215,14 +217,26 @@ def list_categories(limit=None, offset=None):
 
 
 @frappe.whitelist()
-def get_today_checklists(date=None, outlet=None, limit=None, offset=None):
+def get_today_checklists(date=None, outlet=None, status=None, limit=None, offset=None):
 	_check_auth()
 	_check_staff_role()
 	conditions = [["date", "=", date or today()], ["docstatus", "!=", 2]]
 	if outlet and outlet != "All":
 		conditions.append(["location", "=", outlet])
-	names = _get_checklist_names(conditions, "creation desc", limit, offset)
-	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+	# status (Draft/In Progress/Missed/Submitted/Verified/Escalated) is
+	# computed, not stored (see _computed_status) - so it's filtered here
+	# after serializing rather than in the frappe.get_all() query above.
+	# Fine at this scale: one outlet-day's worth of checklists, not the
+	# whole table.
+	names = _get_checklist_names(conditions, "creation desc")
+	checklists = [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+	if status and status != "All":
+		checklists = [c for c in checklists if c["status"] == status]
+	if offset:
+		checklists = checklists[cint(offset):]
+	if limit:
+		checklists = checklists[: cint(limit)]
+	return checklists
 
 
 @frappe.whitelist()
