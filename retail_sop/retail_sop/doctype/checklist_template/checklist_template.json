@@ -9,6 +9,7 @@
   "template_name",
   "shift_type",
   "location",
+  "cutoff_time",
   "active",
   "items"
  ],
@@ -35,6 +36,13 @@
    "in_list_view": 1,
    "label": "Location",
    "options": "Outlet"
+  },
+  {
+   "description": "Time of day by which a checklist created from this template must be submitted. Left blank = no cutoff, never marked Missed.",
+   "fieldname": "cutoff_time",
+   "fieldtype": "Time",
+   "in_list_view": 1,
+   "label": "Cutoff Time"
   },
   {
    "default": "1",

@@ -15,6 +15,7 @@
   "column_break_time",
   "start_time",
   "end_time",
+  "cutoff_time",
   "status",
   "workflow_state",
   "section_break_summary",
@@ -83,13 +84,20 @@
    "label": "End Time"
   },
   {
+   "description": "Copied from the Checklist Template this was created from. Blank = no cutoff, never marked Missed.",
+   "fieldname": "cutoff_time",
+   "fieldtype": "Time",
+   "label": "Cutoff Time",
+   "read_only": 1
+  },
+  {
    "default": "Draft",
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
-   "options": "Draft\nIn Progress\nCompleted\nEscalated",
+   "options": "Draft\nIn Progress\nMissed\nCompleted\nEscalated",
    "read_only": 1
   },
   {
