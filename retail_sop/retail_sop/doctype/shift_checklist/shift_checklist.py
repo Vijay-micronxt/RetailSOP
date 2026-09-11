@@ -24,6 +24,7 @@ class ShiftChecklistValidationError(frappe.ValidationError):
 class ShiftChecklist(Document):
 	def validate(self):
 		self.validate_date_not_backdated()
+		self.sync_cutoff_time_from_template()
 		self.enforce_workflow_state_transition()
 		self.apply_numeric_range_checks()
 		self.compute_summary()
@@ -52,6 +53,23 @@ class ShiftChecklist(Document):
 		before = self.get_doc_before_save()
 		if before and before.date and self.date and getdate(before.date) != getdate(self.date):
 			frappe.throw(_("Date cannot be changed once the Shift Checklist has been created."))
+
+	# ------------------------------------------------------------------
+	# cutoff_time is always re-derived from the linked Checklist Template
+	# here, every save - never trusted from whatever the client (Desk form
+	# or an API payload) sent in. This is what actually stops a stray value
+	# (an empty Time-picker widget defaulting to "now" on manual creation,
+	# a Duplicate action copying an old doc's value, or any other path that
+	# bypasses tasks.py's own copy) from sticking - the field's true source
+	# of truth is the template, full stop, checked fresh every time.
+	# ------------------------------------------------------------------
+	def sync_cutoff_time_from_template(self):
+		if self.checklist_template:
+			self.cutoff_time = frappe.db.get_value(
+				"Checklist Template", self.checklist_template, "cutoff_time"
+			)
+		else:
+			self.cutoff_time = None
 
 	# ------------------------------------------------------------------
 	# Workflow transition guard (backstop for the declarative Workflow
@@ -146,13 +164,26 @@ class ShiftChecklist(Document):
 	# ------------------------------------------------------------------
 	def enforce_submit_rules(self):
 		blocking_rows = self._compute_blocking_rows()
-		if blocking_rows:
-			raise ShiftChecklistValidationError(
-				_("Cannot submit Shift Checklist: {0} row(s) failing validation.").format(
-					len(blocking_rows)
-				),
-				rows=blocking_rows,
-			)
+		if not blocking_rows:
+			return
+
+		# The structured `rows` list is what retail_sop.api.submit_checklist
+		# reshapes into the frontend's per-row error display. A Desk-native
+		# Submit only ever shows str(exception) though, so the message
+		# itself also needs to name the actual checks - a bare count here
+		# left Desk users with no way to tell which rows to go fix.
+		preview = "\n".join(
+			f"- Sr {r['sr_no']} ({r['check_description']}): {r['message']}" for r in blocking_rows[:5]
+		)
+		if len(blocking_rows) > 5:
+			preview += _("\n...and {0} more.").format(len(blocking_rows) - 5)
+
+		raise ShiftChecklistValidationError(
+			_("Cannot submit Shift Checklist: {0} row(s) failing validation.\n{1}").format(
+				len(blocking_rows), preview
+			),
+			rows=blocking_rows,
+		)
 
 	def _compute_blocking_rows(self):
 		blocking_rows = []
