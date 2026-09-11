@@ -215,12 +215,13 @@ def list_categories(limit=None, offset=None):
 
 
 @frappe.whitelist()
-def get_today_checklists(limit=None, offset=None):
+def get_today_checklists(date=None, outlet=None, limit=None, offset=None):
 	_check_auth()
 	_check_staff_role()
-	names = _get_checklist_names(
-		[["date", "=", today()], ["docstatus", "!=", 2]], "creation desc", limit, offset
-	)
+	conditions = [["date", "=", date or today()], ["docstatus", "!=", 2]]
+	if outlet and outlet != "All":
+		conditions.append(["location", "=", outlet])
+	names = _get_checklist_names(conditions, "creation desc", limit, offset)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
 
@@ -234,7 +235,7 @@ def get_checklist(name):
 
 
 @frappe.whitelist()
-def get_history(from_date=None, to_date=None, limit=50, offset=0):
+def get_history(from_date=None, to_date=None, workflow_state=None, outlet=None, limit=50, offset=0):
 	_check_auth()
 	_check_staff_role()
 	conditions = [["docstatus", "=", 1]]
@@ -242,26 +243,51 @@ def get_history(from_date=None, to_date=None, limit=50, offset=0):
 		conditions.append(["date", ">=", from_date])
 	if to_date:
 		conditions.append(["date", "<=", to_date])
+	if workflow_state and workflow_state != "All":
+		conditions.append(["workflow_state", "=", workflow_state])
+	if outlet and outlet != "All":
+		conditions.append(["location", "=", outlet])
 	names = _get_checklist_names(conditions, "date desc", limit, offset)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
 
 @frappe.whitelist()
-def get_verification_queue(limit=50, offset=0):
+def get_verification_queue(outlet=None, from_date=None, to_date=None, limit=50, offset=0):
 	_check_auth()
 	_check_staff_role()
-	names = _get_checklist_names(
-		[["docstatus", "=", 1], ["workflow_state", "!=", "Verified"]], "date asc", limit, offset
-	)
+	conditions = [["docstatus", "=", 1], ["workflow_state", "!=", "Verified"]]
+	if outlet and outlet != "All":
+		conditions.append(["location", "=", outlet])
+	if from_date:
+		conditions.append(["date", ">=", from_date])
+	if to_date:
+		conditions.append(["date", "<=", to_date])
+	names = _get_checklist_names(conditions, "date asc", limit, offset)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
 
 @frappe.whitelist()
-def get_deviations(outlet=None, limit=50, offset=0):
+def get_deviations(
+	outlet=None,
+	resolution_status=None,
+	shift_checklist=None,
+	from_date=None,
+	to_date=None,
+	limit=50,
+	offset=0,
+):
 	_check_auth()
 	filters = {}
 	if outlet and outlet != "All":
 		filters["outlet"] = outlet
+	if resolution_status and resolution_status != "All":
+		filters["resolution_status"] = resolution_status
+	if shift_checklist:
+		filters["shift_checklist"] = shift_checklist
+	if from_date:
+		filters["date"] = [">=", from_date]
+	if to_date:
+		filters["date"] = ["between", [from_date, to_date]] if from_date else ["<=", to_date]
 	kwargs = {}
 	if limit:
 		kwargs["limit_page_length"] = cint(limit)
@@ -302,7 +328,14 @@ def get_my_outlet():
 
 
 @frappe.whitelist()
-def get_my_deviations(limit=50, offset=0):
+def get_my_deviations(
+	resolution_status=None,
+	shift_checklist=None,
+	from_date=None,
+	to_date=None,
+	limit=50,
+	offset=0,
+):
 	"""Checklist Deviations for the single Outlet the calling user is the
 	store_operator of - the Store Operator equivalent of get_deviations(),
 	scoped to their one store instead of every outlet.
@@ -310,6 +343,15 @@ def get_my_deviations(limit=50, offset=0):
 	_check_auth()
 
 	outlet = _get_my_outlet()
+	filters = {"outlet": outlet}
+	if resolution_status and resolution_status != "All":
+		filters["resolution_status"] = resolution_status
+	if shift_checklist:
+		filters["shift_checklist"] = shift_checklist
+	if from_date:
+		filters["date"] = [">=", from_date]
+	if to_date:
+		filters["date"] = ["between", [from_date, to_date]] if from_date else ["<=", to_date]
 	kwargs = {}
 	if limit:
 		kwargs["limit_page_length"] = cint(limit)
@@ -317,7 +359,7 @@ def get_my_deviations(limit=50, offset=0):
 		kwargs["limit_start"] = cint(offset)
 	names = frappe.get_all(
 		"Checklist Deviation",
-		filters={"outlet": outlet},
+		filters=filters,
 		pluck="name",
 		order_by="date desc, creation desc",
 		ignore_permissions=True,
@@ -383,14 +425,15 @@ def get_my_store_summary():
 
 
 @frappe.whitelist()
-def get_my_store_checklists():
-	"""Today's Shift Checklists for the single Outlet the calling user is
-	the store_operator of - the Store Operator equivalent of
+def get_my_store_checklists(date=None):
+	"""Shift Checklists (default: today's) for the single Outlet the calling
+	user is the store_operator of - the Store Operator equivalent of
 	get_today_checklists(), scoped to their one store instead of every
-	outlet. Throws if the account isn't linked to a store. Unlike
-	get_my_store_summary() this returns full checklist detail (all
-	categories, not just Hygiene), since seeing and filling in their own
-	store's checklist is the actual point of this endpoint.
+	outlet. No outlet param - always their own store. Throws if the account
+	isn't linked to a store. Unlike get_my_store_summary() this returns full
+	checklist detail (all categories, not just Hygiene), since seeing and
+	filling in their own store's checklist is the actual point of this
+	endpoint.
 	"""
 	_check_auth()
 
@@ -400,7 +443,7 @@ def get_my_store_checklists():
 
 	names = frappe.get_all(
 		"Shift Checklist",
-		filters={"location": outlet, "date": today(), "docstatus": ["!=", 2]},
+		filters={"location": outlet, "date": date or today(), "docstatus": ["!=", 2]},
 		pluck="name",
 		order_by="creation desc",
 		ignore_permissions=True,
