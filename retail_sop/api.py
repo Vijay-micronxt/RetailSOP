@@ -76,6 +76,13 @@ def _format_time(value):
 		return s[:5] if len(s) >= 5 else s
 
 
+# Single source of truth for the values _computed_status() below can
+# return - exposed via get_checklist_status_options() so the frontend's
+# status dropdown updates automatically if this list ever changes, instead
+# of a hardcoded copy drifting out of sync with the backend.
+CHECKLIST_STATUS_OPTIONS = ["Draft", "In Progress", "Missed", "Submitted", "Verified", "Escalated"]
+
+
 def _computed_status(doc):
 	"""Maps our docstatus/workflow_state onto the frontend's ChecklistStatus
 	union (Draft/In Progress/Missed/Submitted/Verified/Escalated) - the
@@ -214,6 +221,42 @@ def list_categories(limit=None, offset=None):
 	return frappe.get_all(
 		"Checklist Category", filters={"active": 1}, pluck="name", order_by="name", **kwargs
 	)
+
+
+@frappe.whitelist()
+def get_checklist_status_options():
+	"""The full set of values _computed_status() can return, for populating
+	a checklist status filter dropdown. Fixed/computed, not doctype master
+	data, but exposed as an API anyway so the frontend never hardcodes its
+	own copy - if this list changes here, the dropdown picks it up on next
+	load with no frontend code change needed.
+	"""
+	_check_auth()
+	return CHECKLIST_STATUS_OPTIONS
+
+
+@frappe.whitelist()
+def get_deviation_resolution_status_options():
+	"""Checklist Deviation.resolution_status's Select options, read straight
+	from the doctype's own field metadata - genuinely live, so even a
+	Desk-side edit to that field (via Customize Form) shows up here with no
+	code change or deploy at all.
+	"""
+	_check_auth()
+	options = frappe.get_meta("Checklist Deviation").get_field("resolution_status").options
+	return [o for o in (options or "").split("\n") if o]
+
+
+@frappe.whitelist()
+def get_history_status_options():
+	"""Values for get_history()'s workflow_state filter. Not all of
+	Shift Checklist.workflow_state's options (Draft/Submitted/Verified) -
+	History only ever returns docstatus=1 (submitted) records, so Draft
+	isn't a meaningful filter choice there; Submitted/Verified are the only
+	two that can actually occur.
+	"""
+	_check_auth()
+	return ["Submitted", "Verified"]
 
 
 @frappe.whitelist()
