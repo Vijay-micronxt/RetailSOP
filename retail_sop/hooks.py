@@ -58,6 +58,9 @@ scheduler_events = {
 	"daily": [
 		"retail_sop.tasks.create_daily_shift_checklists",
 	],
+	"hourly": [
+		"retail_sop.tasks.mark_missed_checklists",
+	],
 }
 
 # JWT bearer-token auth bypass

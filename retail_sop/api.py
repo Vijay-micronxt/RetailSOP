@@ -76,15 +76,24 @@ def _format_time(value):
 		return s[:5] if len(s) >= 5 else s
 
 
+# Single source of truth for the values _computed_status() below can
+# return - exposed via get_checklist_status_options() so the frontend's
+# status dropdown updates automatically if this list ever changes, instead
+# of a hardcoded copy drifting out of sync with the backend.
+CHECKLIST_STATUS_OPTIONS = ["Draft", "In Progress", "Missed", "Submitted", "Verified", "Escalated"]
+
+
 def _computed_status(doc):
 	"""Maps our docstatus/workflow_state onto the frontend's ChecklistStatus
-	union (Draft/In Progress/Submitted/Verified/Escalated) - the doctype's
-	own `status` field is kept for internal/Desk bookkeeping only and is
-	not the source of truth for what the API reports.
+	union (Draft/In Progress/Missed/Submitted/Verified/Escalated) - the
+	doctype's own `status` field is kept for internal/Desk bookkeeping only
+	and is not the source of truth for what the API reports.
 	"""
 	if doc.docstatus == 2:
 		return "Draft"
 	if doc.docstatus == 0:
+		if doc.cutoff_time and now_datetime() > get_datetime(f"{doc.date} {doc.cutoff_time}"):
+			return "Missed"
 		return "In Progress" if any(row.status for row in doc.items) else "Draft"
 	if doc.workflow_state == "Verified":
 		return "Verified"
@@ -215,13 +224,62 @@ def list_categories(limit=None, offset=None):
 
 
 @frappe.whitelist()
-def get_today_checklists(limit=None, offset=None):
+def get_checklist_status_options():
+	"""The full set of values _computed_status() can return, for populating
+	a checklist status filter dropdown. Fixed/computed, not doctype master
+	data, but exposed as an API anyway so the frontend never hardcodes its
+	own copy - if this list changes here, the dropdown picks it up on next
+	load with no frontend code change needed.
+	"""
+	_check_auth()
+	return CHECKLIST_STATUS_OPTIONS
+
+
+@frappe.whitelist()
+def get_deviation_resolution_status_options():
+	"""Checklist Deviation.resolution_status's Select options, read straight
+	from the doctype's own field metadata - genuinely live, so even a
+	Desk-side edit to that field (via Customize Form) shows up here with no
+	code change or deploy at all.
+	"""
+	_check_auth()
+	options = frappe.get_meta("Checklist Deviation").get_field("resolution_status").options
+	return [o for o in (options or "").split("\n") if o]
+
+
+@frappe.whitelist()
+def get_history_status_options():
+	"""Values for get_history()'s workflow_state filter. Not all of
+	Shift Checklist.workflow_state's options (Draft/Submitted/Verified) -
+	History only ever returns docstatus=1 (submitted) records, so Draft
+	isn't a meaningful filter choice there; Submitted/Verified are the only
+	two that can actually occur.
+	"""
+	_check_auth()
+	return ["Submitted", "Verified"]
+
+
+@frappe.whitelist()
+def get_today_checklists(date=None, outlet=None, status=None, limit=None, offset=None):
 	_check_auth()
 	_check_staff_role()
-	names = _get_checklist_names(
-		[["date", "=", today()], ["docstatus", "!=", 2]], "creation desc", limit, offset
-	)
-	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+	conditions = [["date", "=", date or today()], ["docstatus", "!=", 2]]
+	if outlet and outlet != "All":
+		conditions.append(["location", "=", outlet])
+	# status (Draft/In Progress/Missed/Submitted/Verified/Escalated) is
+	# computed, not stored (see _computed_status) - so it's filtered here
+	# after serializing rather than in the frappe.get_all() query above.
+	# Fine at this scale: one outlet-day's worth of checklists, not the
+	# whole table.
+	names = _get_checklist_names(conditions, "creation desc")
+	checklists = [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+	if status and status != "All":
+		checklists = [c for c in checklists if c["status"] == status]
+	if offset:
+		checklists = checklists[cint(offset):]
+	if limit:
+		checklists = checklists[: cint(limit)]
+	return checklists
 
 
 @frappe.whitelist()
@@ -234,7 +292,7 @@ def get_checklist(name):
 
 
 @frappe.whitelist()
-def get_history(from_date=None, to_date=None, limit=50, offset=0):
+def get_history(from_date=None, to_date=None, workflow_state=None, outlet=None, limit=50, offset=0):
 	_check_auth()
 	_check_staff_role()
 	conditions = [["docstatus", "=", 1]]
@@ -242,26 +300,51 @@ def get_history(from_date=None, to_date=None, limit=50, offset=0):
 		conditions.append(["date", ">=", from_date])
 	if to_date:
 		conditions.append(["date", "<=", to_date])
+	if workflow_state and workflow_state != "All":
+		conditions.append(["workflow_state", "=", workflow_state])
+	if outlet and outlet != "All":
+		conditions.append(["location", "=", outlet])
 	names = _get_checklist_names(conditions, "date desc", limit, offset)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
 
 @frappe.whitelist()
-def get_verification_queue(limit=50, offset=0):
+def get_verification_queue(outlet=None, from_date=None, to_date=None, limit=50, offset=0):
 	_check_auth()
 	_check_staff_role()
-	names = _get_checklist_names(
-		[["docstatus", "=", 1], ["workflow_state", "!=", "Verified"]], "date asc", limit, offset
-	)
+	conditions = [["docstatus", "=", 1], ["workflow_state", "!=", "Verified"]]
+	if outlet and outlet != "All":
+		conditions.append(["location", "=", outlet])
+	if from_date:
+		conditions.append(["date", ">=", from_date])
+	if to_date:
+		conditions.append(["date", "<=", to_date])
+	names = _get_checklist_names(conditions, "date asc", limit, offset)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
 
 @frappe.whitelist()
-def get_deviations(outlet=None, limit=50, offset=0):
+def get_deviations(
+	outlet=None,
+	resolution_status=None,
+	shift_checklist=None,
+	from_date=None,
+	to_date=None,
+	limit=50,
+	offset=0,
+):
 	_check_auth()
 	filters = {}
 	if outlet and outlet != "All":
 		filters["outlet"] = outlet
+	if resolution_status and resolution_status != "All":
+		filters["resolution_status"] = resolution_status
+	if shift_checklist:
+		filters["shift_checklist"] = shift_checklist
+	if from_date:
+		filters["date"] = [">=", from_date]
+	if to_date:
+		filters["date"] = ["between", [from_date, to_date]] if from_date else ["<=", to_date]
 	kwargs = {}
 	if limit:
 		kwargs["limit_page_length"] = cint(limit)
@@ -302,7 +385,14 @@ def get_my_outlet():
 
 
 @frappe.whitelist()
-def get_my_deviations(limit=50, offset=0):
+def get_my_deviations(
+	resolution_status=None,
+	shift_checklist=None,
+	from_date=None,
+	to_date=None,
+	limit=50,
+	offset=0,
+):
 	"""Checklist Deviations for the single Outlet the calling user is the
 	store_operator of - the Store Operator equivalent of get_deviations(),
 	scoped to their one store instead of every outlet.
@@ -310,6 +400,15 @@ def get_my_deviations(limit=50, offset=0):
 	_check_auth()
 
 	outlet = _get_my_outlet()
+	filters = {"outlet": outlet}
+	if resolution_status and resolution_status != "All":
+		filters["resolution_status"] = resolution_status
+	if shift_checklist:
+		filters["shift_checklist"] = shift_checklist
+	if from_date:
+		filters["date"] = [">=", from_date]
+	if to_date:
+		filters["date"] = ["between", [from_date, to_date]] if from_date else ["<=", to_date]
 	kwargs = {}
 	if limit:
 		kwargs["limit_page_length"] = cint(limit)
@@ -317,7 +416,7 @@ def get_my_deviations(limit=50, offset=0):
 		kwargs["limit_start"] = cint(offset)
 	names = frappe.get_all(
 		"Checklist Deviation",
-		filters={"outlet": outlet},
+		filters=filters,
 		pluck="name",
 		order_by="date desc, creation desc",
 		ignore_permissions=True,
@@ -383,14 +482,15 @@ def get_my_store_summary():
 
 
 @frappe.whitelist()
-def get_my_store_checklists():
-	"""Today's Shift Checklists for the single Outlet the calling user is
-	the store_operator of - the Store Operator equivalent of
+def get_my_store_checklists(date=None):
+	"""Shift Checklists (default: today's) for the single Outlet the calling
+	user is the store_operator of - the Store Operator equivalent of
 	get_today_checklists(), scoped to their one store instead of every
-	outlet. Throws if the account isn't linked to a store. Unlike
-	get_my_store_summary() this returns full checklist detail (all
-	categories, not just Hygiene), since seeing and filling in their own
-	store's checklist is the actual point of this endpoint.
+	outlet. No outlet param - always their own store. Throws if the account
+	isn't linked to a store. Unlike get_my_store_summary() this returns full
+	checklist detail (all categories, not just Hygiene), since seeing and
+	filling in their own store's checklist is the actual point of this
+	endpoint.
 	"""
 	_check_auth()
 
@@ -400,7 +500,7 @@ def get_my_store_checklists():
 
 	names = frappe.get_all(
 		"Shift Checklist",
-		filters={"location": outlet, "date": today(), "docstatus": ["!=", 2]},
+		filters={"location": outlet, "date": date or today(), "docstatus": ["!=", 2]},
 		pluck="name",
 		order_by="creation desc",
 		ignore_permissions=True,
