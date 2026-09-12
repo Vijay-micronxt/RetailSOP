@@ -6,9 +6,10 @@ app_email = "vijay@micronxt.com"
 app_license = "mit"
 
 # This app is installed on top of an existing ERPNext bench and links to
-# core doctypes (Employee, Customer). If Employee lives in a separate
-# "hrms" app on the target bench, add "hrms" here too.
-required_apps = ["frappe", "erpnext"]
+# core doctypes (Employee, Customer) plus, for attendance/leave (§13),
+# Attendance/Leave Application/Leave Type/Leave Allocation - all of which
+# live in the separate "hrms" app on modern ERPNext benches.
+required_apps = ["frappe", "erpnext", "hrms"]
 
 # Includes in <head>
 # ------------------
@@ -18,13 +19,16 @@ doctype_js = {
 
 # Fixtures
 # --------
-# Ships the two custom roles and the Draft -> Submitted -> Verified
-# workflow config for Shift Checklist declaratively, so they exist right
-# after `bench install-app` / `bench migrate` without a manual setup step.
+# Ships the app's roles, the Draft -> Submitted -> Verified workflow
+# config for Shift Checklist, and the Employee.outlet custom field (§13)
+# declaratively, so they exist right after `bench install-app` /
+# `bench migrate` without a manual setup step.
 fixtures = [
 	{
 		"dt": "Role",
-		"filters": [["role_name", "in", ["Food Court Supervisor", "Food Court Manager"]]],
+		"filters": [
+			["role_name", "in", ["Food Court Supervisor", "Food Court Manager", "Store Operator"]]
+		],
 	},
 	{
 		"dt": "Workflow State",
@@ -41,6 +45,10 @@ fixtures = [
 	{
 		"dt": "Notification",
 		"filters": [["name", "=", "Critical Checklist Deviation Alert"]],
+	},
+	{
+		"dt": "Custom Field",
+		"filters": [["name", "=", "Employee-outlet"]],
 	},
 ]
 

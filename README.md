@@ -718,6 +718,66 @@ that's missing instead.
 
 ---
 
+## 13. Attendance & leave (`retail_sop/hr_api.py`)
+
+Layered on Frappe HR's own `Employee`/`Attendance`/`Leave Application`/
+`Leave Type`/`Leave Allocation` doctypes (the separate **`hrms`** app -
+now in `hooks.py::required_apps`; `bench --site your-site install-app
+hrms` first if it isn't already on the target bench) rather than
+reinventing attendance/leave inside `retail_sop`. Two audiences:
+
+- **Outlet/vendor floor staff** — usually hold no login of their own. A
+  Supervisor/Manager marks their attendance for the day on their behalf,
+  scoped to one outlet via a new `Employee.outlet` custom field (Link →
+  `Outlet` — `fixtures/custom_field.json`; `Employee` has no such field
+  natively).
+- **This app's own users** (Supervisor/Manager/Store Operator) — self-
+  service leave, resolved via `Employee.user_id` matching
+  `frappe.session.user`, same lookup pattern as `get_my_store_summary`'s
+  `Outlet.store_operator`. Throws `frappe.PermissionError` ("Your account
+  is not linked to an Employee record.") if there's no matching Employee.
+
+| Method | Behavior |
+|---|---|
+| `list_outlet_employees(outlet=None)` | Active Employees, optionally filtered to one outlet. Supervisor/Manager only |
+| `get_attendance_for_date(date=None, outlet=None)` | Each employee paired with their Attendance status for that date (today if omitted), or `null` if unmarked. Supervisor/Manager only |
+| `mark_attendance(date, records)` | `records`: `[{employee, status}]`, status one of `Present/Absent/Half Day/On Leave`. **Skips** (doesn't error) any employee already marked (submitted) that day — returns `{marked: [...], skipped: [...]}`. Re-marking a submitted day isn't supported. Supervisor/Manager only |
+| `get_leave_types()` | Active `Leave Type` records — real ERPNext master, not a fixed list, same "pull live" pattern as `list_categories()`/`list_outlets()` |
+| `get_my_leave_balance()` | `[{leave_type, allocated, taken, balance}]` for the caller's own Employee — computed directly from `Leave Allocation`/`Leave Application` totals, not an internal HRMS helper (avoids depending on a version-specific function signature) |
+| `apply_leave(leave_type, from_date, to_date, reason=None)` | Inserts + submits a `Leave Application` for the caller's own Employee. HRMS's own `validate()` enforces balance/holiday/overlap rules — never re-implemented here, it just throws if invalid |
+| `get_my_leave_applications()` | The caller's own leave history (any non-cancelled application) |
+| `get_pending_leave_approvals()` | Every `status="Open"` leave application, for **any** Food Court Manager to action — see below for why this is flat |
+| `action_leave_application(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Manager (or System Manager) only |
+
+**Permissions**: same code-scoped philosophy as `Store Operator`
+elsewhere in this app — Food Court Supervisor/Manager/Store Operator
+hold **no** direct doctype permission on `Employee`/`Attendance`/`Leave
+Application` (HRMS's own permission model is built around `HR Manager`/
+`HR User`, roles this app doesn't use); every call here runs with
+`ignore_permissions=True`, and this module's own role checks
+(`_check_staff_role()`, reused from `api.py`, or an inline Manager-only
+check) are the only gate.
+
+**Leave approval is flat, not per-employee-assigned**: `Leave
+Application.leave_approver` is normally one specific person per
+employee, routing a chain of approval. This app doesn't use that model —
+any Food Court Manager can action any Open request, mirroring how any
+Manager can Verify any Shift Checklist (§8), rather than the checklist
+being routed to one assigned person. `apply_leave()` still populates
+`leave_approver` on the new document (preferring the employee's own
+`Employee.leave_approver` if set, else falling back to any user holding
+Food Court Manager), purely because HRMS's form expects that field
+filled in — not because it restricts who may actually approve.
+
+**Not verified against a live bench** (same caveat as the Workflow/
+Notification fixtures in §10): `Attendance`'s mandatory fields,
+`Leave Application`'s exact `validate()` behavior, and `Leave
+Allocation`'s field names are written from framework knowledge of
+Frappe HR's stable core schema, not confirmed against your specific
+installed version. Double-check after the first `bench migrate`.
+
+---
+
 ## License
 
 MIT
