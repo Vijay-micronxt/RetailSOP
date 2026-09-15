@@ -529,10 +529,10 @@ then remove it. Payload: `{"sub": user, "sid": <Auth Session name>,
 
 ### Endpoints (`auth/api.py`)
 
-All `@frappe.whitelist(allow_guest=True, methods=["POST"])` except `me`
-and `logout_all`, which require an already-authenticated request (a
-valid `Authorization` header, processed by the middleware below) and use
-plain `@frappe.whitelist()`.
+All `@frappe.whitelist(allow_guest=True, methods=["POST"])` except `me`,
+`logout_all`, and `change_password`, which require an already-authenticated
+request (a valid `Authorization` header, processed by the middleware
+below) and use plain `@frappe.whitelist()`.
 
 | Method | Behavior |
 |---|---|
@@ -544,6 +544,22 @@ plain `@frappe.whitelist()`.
 | `forgot_password(email)` | See "Forgot/reset password" below. Always `{success: true}` |
 | `check_reset_token(email, token)` | Read-only pre-check, `{valid: bool}` — no side effects |
 | `reset_password(email, token, new_password)` | See below |
+| `change_password(old_password, new_password)` | Authenticated self-service change from the profile menu — see below |
+
+### Change password (signed-in user)
+
+Distinct from forgot/reset below, which is for someone locked out and
+not signed in at all. `change_password(old_password, new_password)`
+verifies `old_password` via the same `check_password` `login()` uses
+(raises `frappe.AuthenticationError` if wrong), then sets the new one
+via `User.new_password` + `save()` — same mechanism as `reset_password`.
+Afterwards it revokes **every** `Auth Session` for that user, this
+device's own current session included, matching `reset_password`'s
+existing "password changed → force re-login everywhere" behavior rather
+than adding a new exception for the calling device. The frontend clears
+its local tokens and routes back to `/login` immediately after a
+successful call, rather than letting the now-revoked session's next
+request surface as a confusing 401.
 
 ### Forgot/reset password
 

@@ -203,6 +203,43 @@ def me():
 	return build_user_profile(frappe.session.user)
 
 
+@frappe.whitelist(methods=["POST"])
+def change_password(old_password, new_password):
+	"""Authenticated self-service password change, from the signed-in
+	user's own profile menu - distinct from forgot_password/reset_password
+	above, which are for someone not signed in at all. Proves identity via
+	the caller's current password (check_password, same verifier login()
+	uses) rather than an emailed token.
+	"""
+	if not (old_password and new_password):
+		frappe.throw(_("old_password and new_password are both required."))
+
+	user = frappe.session.user
+	# Raises frappe.AuthenticationError on a wrong old password - never
+	# rolled by hand, same as login().
+	check_password(user, old_password)
+
+	user_doc = frappe.get_doc("User", user)
+	user_doc.new_password = new_password
+	user_doc.save(ignore_permissions=True)
+
+	# Same "force re-login everywhere" as reset_password() - the request
+	# making this call is itself authenticated via a JWT whose signature
+	# stays valid regardless of the password change, so without this the
+	# caller's own current session would silently keep working on the old
+	# credentials' session record. Simplest correct behavior is the same
+	# one reset_password already uses: revoke every session for this user,
+	# this device included, and have the frontend send them back to
+	# /login to re-authenticate with the new password.
+	session_names = frappe.get_all(
+		"Auth Session", filters={"user": user, "revoked_at": ["is", "not set"]}, pluck="name"
+	)
+	for session_name in session_names:
+		frappe.db.set_value("Auth Session", session_name, "revoked_at", now_datetime())
+
+	return {"success": True}
+
+
 def _get_frontend_url():
 	url = frappe.conf.get(CONF_FRONTEND_URL)
 	if not url:
