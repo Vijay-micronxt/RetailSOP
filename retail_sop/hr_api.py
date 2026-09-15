@@ -5,9 +5,12 @@ see hooks.py::required_apps) rather than reinventing them inside retail_sop.
 Two audiences, per the actual use case:
   - Outlet/vendor floor staff: usually have no login of their own. A
     Supervisor/Manager marks their attendance for the day on their behalf
-    (list_outlet_employees / get_attendance_for_date / mark_attendance).
-    Scoped to one outlet at a time via the Employee.outlet custom field
-    (see fixtures/custom_field.json) - Employee itself has no such field
+    (list_outlet_employees / get_attendance_for_date / mark_attendance),
+    and can review any one employee's full history
+    (get_employee_attendance_history / get_employee_leave_history -
+    paginated, optionally bounded to a date range). Scoped to one outlet
+    at a time via the Employee.outlet custom field (see
+    fixtures/custom_field.json) - Employee itself has no such field
     natively.
   - This app's own users (Supervisor/Manager/Store Operator): self-service
     leave and timesheets, same as any Employee Self Service portal -
@@ -228,6 +231,89 @@ def get_pending_leave_approvals():
 		],
 		order_by="from_date asc",
 		ignore_permissions=True,
+	)
+
+
+def _paginate(doctype, filters, fields, order_by, page, page_size):
+	page = cint(page) or 1
+	page_size = min(cint(page_size) or 20, 100)
+	total = frappe.db.count(doctype, filters=filters)
+	records = frappe.get_all(
+		doctype,
+		filters=filters,
+		fields=fields,
+		order_by=order_by,
+		limit_start=(page - 1) * page_size,
+		limit_page_length=page_size,
+		ignore_permissions=True,
+	)
+	return {"records": records, "total": total, "page": page, "page_size": page_size}
+
+
+def _date_range_filter(fieldname, from_date, to_date):
+	"""[fieldname, operator, value] filter for an optional [from_date,
+	to_date] window - either bound alone, both, or neither (no filter).
+	"""
+	filters = {}
+	if from_date and to_date:
+		filters[fieldname] = ["between", [getdate(from_date), getdate(to_date)]]
+	elif from_date:
+		filters[fieldname] = [">=", getdate(from_date)]
+	elif to_date:
+		filters[fieldname] = ["<=", getdate(to_date)]
+	return filters
+
+
+@frappe.whitelist()
+def get_employee_attendance_history(employee, from_date=None, to_date=None, page=1, page_size=20):
+	"""Paginated Attendance history for one employee (bounded to
+	[from_date, to_date] on attendance_date when given), for a
+	Supervisor/Manager reviewing that person's record - not self-service,
+	see get_my_leave_applications for the caller's-own-record equivalent.
+	"""
+	_check_auth()
+	_check_staff_role()
+	if not employee:
+		frappe.throw(_("employee is required."))
+
+	filters = {
+		"employee": employee,
+		"docstatus": 1,
+		**_date_range_filter("attendance_date", from_date, to_date),
+	}
+	return _paginate(
+		"Attendance",
+		filters,
+		["name", "attendance_date", "status"],
+		"attendance_date desc",
+		page,
+		page_size,
+	)
+
+
+@frappe.whitelist()
+def get_employee_leave_history(employee, from_date=None, to_date=None, page=1, page_size=20):
+	"""Paginated Leave Application history for one employee (bounded to
+	[from_date, to_date] on from_date when given) - same Supervisor/
+	Manager review use case as get_employee_attendance_history.
+	"""
+	_check_auth()
+	_check_staff_role()
+	if not employee:
+		frappe.throw(_("employee is required."))
+
+	filters = {
+		"employee": employee,
+		"docstatus": ["!=", 2],
+		**_date_range_filter("from_date", from_date, to_date),
+	}
+	return _paginate(
+		"Leave Application",
+		filters,
+		["name", "leave_type", "from_date", "to_date", "total_leave_days", "status", "description"],
+		"from_date desc",
+		page,
+		page_size,
 	)
 
 

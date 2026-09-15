@@ -756,6 +756,8 @@ Timesheet` doctype (§13.1). Two audiences:
 | `submit_timesheet(date, check_in, check_out, remarks=None)` | Inserts a `Shift Timesheet` (`status="Open"`) for the caller's own Employee. `hours_worked` is computed server-side (`ShiftTimesheet.validate`), never trusted from the client |
 | `get_pending_timesheet_approvals()` | Every `status="Open"` timesheet, for any Food Court Supervisor or Manager to action — same flat model as leave |
 | `action_timesheet(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only |
+| `get_employee_attendance_history(employee, from_date=None, to_date=None, page=1, page_size=20)` | Paginated `Attendance` history for **any one employee** (not just the caller's own), optionally bounded to `[from_date, to_date]` on `attendance_date`. Returns `{records, total, page, page_size}`; `page_size` capped at 100. Supervisor/Manager only |
+| `get_employee_leave_history(employee, from_date=None, to_date=None, page=1, page_size=20)` | Same shape as above, over `Leave Application`, bounded on `from_date`. Supervisor/Manager only |
 
 **Permissions**: same code-scoped philosophy as `Store Operator`
 elsewhere in this app — Food Court Supervisor/Manager/Store Operator
