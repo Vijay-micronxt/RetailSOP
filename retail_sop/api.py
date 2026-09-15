@@ -308,6 +308,50 @@ def get_history(from_date=None, to_date=None, workflow_state=None, outlet=None, 
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
 
+def _compliance_by_date(rows):
+	"""rows: an iterable of {date, compliance_score} - averages
+	compliance_score per calendar date and returns points sorted oldest
+	to newest, the shape a line chart wants. Shared by get_history_chart
+	and get_my_store_history_chart below.
+	"""
+	by_date = {}
+	for row in rows:
+		by_date.setdefault(str(row.date), []).append(row.compliance_score or 0)
+	return [
+		{"date": date, "compliance": round(sum(scores) / len(scores), 2)}
+		for date, scores in sorted(by_date.items())
+	]
+
+
+@frappe.whitelist()
+def get_history_chart(from_date=None, to_date=None, workflow_state=None, outlet=None):
+	"""Compliance-trend aggregate backing the chart on the History screen -
+	same filters as get_history() above, but summarized (average
+	compliance_score per date) instead of paginated full records. The
+	History list only ever has one page of records loaded client-side at
+	a time (see sopService.ts's useInfiniteQuery), which isn't enough to
+	chart the whole filtered range - this intentionally does its own
+	unpaginated fetch rather than trying to derive the chart from
+	whatever page happens to be in view.
+	"""
+	_check_auth()
+	_check_staff_role()
+	conditions = [["docstatus", "=", 1]]
+	if from_date:
+		conditions.append(["date", ">=", from_date])
+	if to_date:
+		conditions.append(["date", "<=", to_date])
+	if workflow_state and workflow_state != "All":
+		conditions.append(["workflow_state", "=", workflow_state])
+	if outlet and outlet != "All":
+		conditions.append(["location", "=", outlet])
+
+	rows = frappe.get_all(
+		"Shift Checklist", filters=conditions, fields=["date", "compliance_score"]
+	)
+	return _compliance_by_date(rows)
+
+
 @frappe.whitelist()
 def get_verification_queue(outlet=None, from_date=None, to_date=None, limit=50, offset=0):
 	_check_auth()
@@ -528,6 +572,30 @@ def get_my_store_history(from_date=None, to_date=None, limit=50, offset=0):
 		conditions.append(["date", "<=", to_date])
 	names = _get_checklist_names(conditions, "date desc", limit, offset)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+
+
+@frappe.whitelist()
+def get_my_store_history_chart(from_date=None, to_date=None):
+	"""Store Operator equivalent of get_history_chart(), scoped to their
+	one outlet - same relationship as get_my_store_history() has to
+	get_history(). Throws if the account isn't linked to a store.
+	"""
+	_check_auth()
+
+	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
+	if not outlet:
+		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+
+	conditions = [["location", "=", outlet], ["docstatus", "=", 1]]
+	if from_date:
+		conditions.append(["date", ">=", from_date])
+	if to_date:
+		conditions.append(["date", "<=", to_date])
+
+	rows = frappe.get_all(
+		"Shift Checklist", filters=conditions, fields=["date", "compliance_score"]
+	)
+	return _compliance_by_date(rows)
 
 
 @frappe.whitelist()

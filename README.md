@@ -307,6 +307,7 @@ via `fetch()`/`callMethod()`; there's no mock data left in that app.
 | `getTodayChecklists()` | `get_today_checklists()` | Full checklists (with items), not a summary list |
 | `getChecklist(name)` | `get_checklist(name)` | `None` if not found |
 | `getHistory(from, to)` | `get_history(from_date=None, to_date=None)` | Submitted checklists (any workflow state) in range |
+| `getHistoryChart(from, to, status, outlet)` | `get_history_chart(from_date=None, to_date=None, workflow_state=None, outlet=None)` | Average `compliance_score` per date, same filters as `get_history()` — backs the History screen's trend chart, unpaginated (the point is the whole filtered range, not one page of it) |
 | `getVerificationQueue()` | `get_verification_queue()` | Submitted + not-yet-Verified (covers Escalated too) |
 | `getDeviations(outlet)` | `get_deviations(outlet=None)` | `"All"`/blank outlet means no filter |
 | `getDashboardData()` | `get_dashboard_data()` | One call, all five sections — see below |
@@ -339,6 +340,14 @@ assumption, adjust in `api.py` if a different definition of "rating" is
 wanted). `hygiene_checks` is every `Hygiene`-category row from those same
 checklists. Throws `PermissionError` if the calling user isn't set as
 any outlet's `store_operator`.
+
+Two more Store Operator endpoints back their own `/history` screen
+(`sopService.ts::getMyStoreHistory`/`getHistoryChart`, same scoping as
+above): `get_my_store_history(from_date=None, to_date=None, limit=50,
+offset=0)` — the paginated list, scoped to that one outlet, the Store
+Operator equivalent of `get_history()` — and
+`get_my_store_history_chart(from_date=None, to_date=None)` — the
+equivalent of `get_history_chart()` for the same outlet.
 
 A few deliberate departures from the app's original design, made to
 match this frontend's actual contract:
