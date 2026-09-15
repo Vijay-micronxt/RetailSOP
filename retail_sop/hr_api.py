@@ -93,6 +93,9 @@ def get_attendance_for_date(date=None, outlet=None):
 	date = getdate(date) if date else getdate()
 
 	employees = list_outlet_employees(outlet)
+	if not employees:
+		return []
+
 	marked = frappe.get_all(
 		"Attendance",
 		filters={"attendance_date": date, "docstatus": 1, "employee": ["in", [e.name for e in employees]]},
@@ -116,7 +119,13 @@ def get_attendance_for_date(date=None, outlet=None):
 @frappe.whitelist()
 def get_leave_types():
 	_check_auth()
-	return frappe.get_all("Leave Type", filters={"disabled": 0}, pluck="name", order_by="name")
+	# ignore_permissions=True, same as every other call in this module -
+	# Food Court roles hold zero native permission on Leave Type (or any
+	# other HRMS doctype), so without it this silently returns [] instead
+	# of throwing, and the Raise-leave form's type chips never populate.
+	return frappe.get_all(
+		"Leave Type", filters={"disabled": 0}, pluck="name", order_by="name", ignore_permissions=True
+	)
 
 
 @frappe.whitelist()
