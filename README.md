@@ -718,13 +718,17 @@ that's missing instead.
 
 ---
 
-## 13. Attendance & leave (`retail_sop/hr_api.py`)
+## 13. Attendance, leave & timesheets (`retail_sop/hr_api.py`)
 
 Layered on Frappe HR's own `Employee`/`Attendance`/`Leave Application`/
 `Leave Type`/`Leave Allocation` doctypes (the separate **`hrms`** app -
 now in `hooks.py::required_apps`; `bench --site your-site install-app
 hrms` first if it isn't already on the target bench) rather than
-reinventing attendance/leave inside `retail_sop`. Two audiences:
+reinventing attendance/leave inside `retail_sop`. Shift timesheets are
+the one piece with no HRMS equivalent worth reusing (its real `Timesheet`
+doctype is built around Task/Project costing, not a plain shift-hours
+log with an approve/reject flow) — that one's `retail_sop`'s own `Shift
+Timesheet` doctype (§13.1). Two audiences:
 
 - **Outlet/vendor floor staff** — usually hold no login of their own. A
   Supervisor/Manager marks their attendance for the day on their behalf,
@@ -732,7 +736,7 @@ reinventing attendance/leave inside `retail_sop`. Two audiences:
   `Outlet` — `fixtures/custom_field.json`; `Employee` has no such field
   natively).
 - **This app's own users** (Supervisor/Manager/Store Operator) — self-
-  service leave, resolved via `Employee.user_id` matching
+  service leave and timesheets, resolved via `Employee.user_id` matching
   `frappe.session.user`, same lookup pattern as `get_my_store_summary`'s
   `Outlet.store_operator`. Throws `frappe.PermissionError` ("Your account
   is not linked to an Employee record.") if there's no matching Employee.
@@ -746,28 +750,49 @@ reinventing attendance/leave inside `retail_sop`. Two audiences:
 | `get_my_leave_balance()` | `[{leave_type, allocated, taken, balance}]` for the caller's own Employee — computed directly from `Leave Allocation`/`Leave Application` totals, not an internal HRMS helper (avoids depending on a version-specific function signature) |
 | `apply_leave(leave_type, from_date, to_date, reason=None)` | Inserts + submits a `Leave Application` for the caller's own Employee. HRMS's own `validate()` enforces balance/holiday/overlap rules — never re-implemented here, it just throws if invalid |
 | `get_my_leave_applications()` | The caller's own leave history (any non-cancelled application) |
-| `get_pending_leave_approvals()` | Every `status="Open"` leave application, for **any** Food Court Manager to action — see below for why this is flat |
-| `action_leave_application(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Manager (or System Manager) only |
+| `get_pending_leave_approvals()` | Every `status="Open"` leave application, for **any** Food Court Supervisor or Manager to action — see below for why this is flat |
+| `action_leave_application(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only |
+| `get_my_timesheets()` | The caller's own `Shift Timesheet` history |
+| `submit_timesheet(date, check_in, check_out, remarks=None)` | Inserts a `Shift Timesheet` (`status="Open"`) for the caller's own Employee. `hours_worked` is computed server-side (`ShiftTimesheet.validate`), never trusted from the client |
+| `get_pending_timesheet_approvals()` | Every `status="Open"` timesheet, for any Food Court Supervisor or Manager to action — same flat model as leave |
+| `action_timesheet(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only |
 
 **Permissions**: same code-scoped philosophy as `Store Operator`
 elsewhere in this app — Food Court Supervisor/Manager/Store Operator
 hold **no** direct doctype permission on `Employee`/`Attendance`/`Leave
-Application` (HRMS's own permission model is built around `HR Manager`/
-`HR User`, roles this app doesn't use); every call here runs with
-`ignore_permissions=True`, and this module's own role checks
-(`_check_staff_role()`, reused from `api.py`, or an inline Manager-only
-check) are the only gate.
+Application`/`Shift Timesheet` (HRMS's own permission model is built
+around `HR Manager`/`HR User`, roles this app doesn't use); every call
+here runs with `ignore_permissions=True`, and this module's own role
+checks (`_check_staff_role()`, reused from `api.py`, or an inline
+Supervisor-or-Manager check) are the only gate.
 
-**Leave approval is flat, not per-employee-assigned**: `Leave
-Application.leave_approver` is normally one specific person per
-employee, routing a chain of approval. This app doesn't use that model —
-any Food Court Manager can action any Open request, mirroring how any
-Manager can Verify any Shift Checklist (§8), rather than the checklist
-being routed to one assigned person. `apply_leave()` still populates
-`leave_approver` on the new document (preferring the employee's own
-`Employee.leave_approver` if set, else falling back to any user holding
-Food Court Manager), purely because HRMS's form expects that field
-filled in — not because it restricts who may actually approve.
+**Leave and timesheet approval are both flat, not per-employee-
+assigned**: `Leave Application.leave_approver` is normally one specific
+person per employee, routing a chain of approval. This app doesn't use
+that model — any Food Court Supervisor or Manager can action any Open
+leave application or timesheet, mirroring how any Manager can Verify any
+Shift Checklist (§8), rather than being routed to one assigned person.
+`apply_leave()` still populates `leave_approver` on the new document
+(preferring the employee's own `Employee.leave_approver` if set, else
+falling back to any user holding Food Court Manager), purely because
+HRMS's form expects that field filled in — not because it restricts who
+may actually approve.
+
+### 13.1 Shift Timesheet doctype
+
+`retail_sop.retail_sop.doctype.shift_timesheet` — a plain, app-owned
+doctype (not a fixture, ships like `Shift Checklist` does), deliberately
+*not* HRMS's real `Timesheet` (which is built around Task/Project time
+costing) and not `Employee Checkin` (which has no approval workflow).
+Fields: `employee` (Link), `employee_name` (fetched from
+`employee.employee_name`, for list display), `date`, `check_in`/
+`check_out` (Time), `hours_worked` (Float, read-only — computed in
+`validate()` via `frappe.utils.time_diff_in_hours`, never accepted from
+the client), `status` (Select: `Open`/`Approved`/`Rejected`, default
+`Open`, read-only from outside `hr_api.py`), `remarks` (Small Text).
+Native permissions are System Manager only, same as `Auth Session`/
+`Password Reset Request` — every other read/write goes through
+`hr_api.py`'s own role checks above.
 
 **Not verified against a live bench** (same caveat as the Workflow/
 Notification fixtures in §10): `Attendance`'s mandatory fields,

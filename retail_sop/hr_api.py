@@ -10,26 +10,36 @@ Two audiences, per the actual use case:
     (see fixtures/custom_field.json) - Employee itself has no such field
     natively.
   - This app's own users (Supervisor/Manager/Store Operator): self-service
-    leave, same as any Employee Self Service portal - apply_leave/
-    get_my_leave_balance/get_my_leave_applications - resolved via
-    Employee.user_id matching frappe.session.user, same pattern as
+    leave and timesheets, same as any Employee Self Service portal -
+    apply_leave/get_my_leave_balance/get_my_leave_applications and
+    submit_timesheet/get_my_timesheets - resolved via Employee.user_id
+    matching frappe.session.user, same pattern as
     retail_sop.api.get_my_store_summary's Outlet.store_operator lookup.
 
 Permission model matches the rest of this app: Food Court Supervisor/
 Manager/Store Operator hold **no** direct doctype permission on Employee/
-Attendance/Leave Application (HRMS's own permission model is built around
-HR Manager/HR User, which this app's roles aren't) - every read/write here
-runs with ignore_permissions=True and this module's own role checks are
-the only gate, exactly like retail_sop.api's _check_staff_role.
+Attendance/Leave Application/Shift Timesheet (HRMS's own permission model
+is built around HR Manager/HR User, which this app's roles aren't) - every
+read/write here runs with ignore_permissions=True and this module's own
+role checks are the only gate, exactly like retail_sop.api's
+_check_staff_role.
 
-Leave approval in this app is flat, not per-employee-assigned: any Food
-Court Manager can action any Open leave application (mirroring how any
-Manager can Verify any Shift Checklist in api.py), rather than routing
-through Employee.leave_approver's normal one-approver-per-employee chain.
-That field still gets set on a new Leave Application (falling back to any
-Food Court Manager if the employee's own record doesn't have one) purely
+Leave and timesheet approval in this app is flat, not per-employee-
+assigned: any Food Court Supervisor or Manager can action any Open leave
+application or timesheet (mirroring how any Manager can Verify any Shift
+Checklist in api.py), rather than routing through
+Employee.leave_approver's normal one-approver-per-employee chain. That
+field still gets set on a new Leave Application (falling back to any Food
+Court Manager if the employee's own record doesn't have one) purely
 because HRMS's own form expects it to be populated - not to restrict who
 may actually approve.
+
+Shift Timesheet is this app's own lightweight doctype (not HRMS's real
+Timesheet, which is built around Task/Project costing that doesn't apply
+here) - just a shift hours log an employee fills in themselves
+(check_in/check_out -> hours_worked, computed server-side in
+ShiftTimesheet.validate) that a Supervisor or Manager approves or
+rejects, same shape as the leave flow above.
 """
 
 import frappe
@@ -194,13 +204,13 @@ def get_my_leave_applications():
 
 @frappe.whitelist()
 def get_pending_leave_approvals():
-	"""Every Open leave application, for any Food Court Manager to action
-	- see module docstring for why this is flat rather than routed to one
-	assigned approver.
+	"""Every Open leave application, for any Food Court Supervisor or
+	Manager to action - see module docstring for why this is flat rather
+	than routed to one assigned approver.
 	"""
 	_check_auth()
 	roles = set(frappe.get_roles(frappe.session.user))
-	if not roles & {"Food Court Manager", "System Manager"}:
+	if not roles & {"Food Court Supervisor", "Food Court Manager", "System Manager"}:
 		frappe.throw(_("Not permitted."), frappe.PermissionError)
 
 	return frappe.get_all(
@@ -308,7 +318,7 @@ def apply_leave(leave_type, from_date, to_date, reason=None):
 def action_leave_application(name, approve):
 	_check_auth()
 	roles = set(frappe.get_roles(frappe.session.user))
-	if not roles & {"Food Court Manager", "System Manager"}:
+	if not roles & {"Food Court Supervisor", "Food Court Manager", "System Manager"}:
 		frappe.throw(_("Not permitted."), frappe.PermissionError)
 
 	application = frappe.get_doc("Leave Application", name)
@@ -319,3 +329,87 @@ def action_leave_application(name, approve):
 	application.save(ignore_permissions=True)
 
 	return {"name": application.name, "status": application.status}
+
+
+# ------------------------------- timesheets ----------------------------
+
+
+@frappe.whitelist()
+def get_my_timesheets():
+	_check_auth()
+	employee = _get_my_employee()
+	return frappe.get_all(
+		"Shift Timesheet",
+		filters={"employee": employee},
+		fields=["name", "date", "check_in", "check_out", "hours_worked", "status", "remarks"],
+		order_by="date desc",
+		ignore_permissions=True,
+	)
+
+
+@frappe.whitelist()
+def submit_timesheet(date, check_in, check_out, remarks=None):
+	_check_auth()
+	if not (date and check_in and check_out):
+		frappe.throw(_("date, check_in and check_out are all required."))
+
+	employee = _get_my_employee()
+	timesheet = frappe.new_doc("Shift Timesheet")
+	timesheet.employee = employee
+	timesheet.date = date
+	timesheet.check_in = check_in
+	timesheet.check_out = check_out
+	timesheet.remarks = remarks
+	timesheet.status = "Open"
+	timesheet.insert(ignore_permissions=True)
+
+	return {
+		"name": timesheet.name,
+		"status": timesheet.status,
+		"hours_worked": timesheet.hours_worked,
+	}
+
+
+@frappe.whitelist()
+def get_pending_timesheet_approvals():
+	"""Every Open Shift Timesheet, for any Food Court Supervisor or
+	Manager to action - flat, same as get_pending_leave_approvals.
+	"""
+	_check_auth()
+	roles = set(frappe.get_roles(frappe.session.user))
+	if not roles & {"Food Court Supervisor", "Food Court Manager", "System Manager"}:
+		frappe.throw(_("Not permitted."), frappe.PermissionError)
+
+	return frappe.get_all(
+		"Shift Timesheet",
+		filters={"status": "Open"},
+		fields=[
+			"name",
+			"employee",
+			"employee_name",
+			"date",
+			"check_in",
+			"check_out",
+			"hours_worked",
+			"remarks",
+		],
+		order_by="date asc",
+		ignore_permissions=True,
+	)
+
+
+@frappe.whitelist()
+def action_timesheet(name, approve):
+	_check_auth()
+	roles = set(frappe.get_roles(frappe.session.user))
+	if not roles & {"Food Court Supervisor", "Food Court Manager", "System Manager"}:
+		frappe.throw(_("Not permitted."), frappe.PermissionError)
+
+	timesheet = frappe.get_doc("Shift Timesheet", name)
+	if timesheet.status != "Open":
+		frappe.throw(_("This timesheet has already been actioned."))
+
+	timesheet.status = "Approved" if cint(approve) else "Rejected"
+	timesheet.save(ignore_permissions=True)
+
+	return {"name": timesheet.name, "status": timesheet.status}
