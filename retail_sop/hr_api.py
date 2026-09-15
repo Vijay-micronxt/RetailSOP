@@ -119,12 +119,17 @@ def get_attendance_for_date(date=None, outlet=None):
 @frappe.whitelist()
 def get_leave_types():
 	_check_auth()
+	# Leave Type doesn't have a "disabled" field on every HRMS version (it
+	# threw "Unknown column" on at least one real site) - only filter on it
+	# when the installed version's doctype actually has the field, rather
+	# than assuming a specific schema.
+	filters = {"disabled": 0} if frappe.get_meta("Leave Type").has_field("disabled") else {}
 	# ignore_permissions=True, same as every other call in this module -
 	# Food Court roles hold zero native permission on Leave Type (or any
 	# other HRMS doctype), so without it this silently returns [] instead
 	# of throwing, and the Raise-leave form's type chips never populate.
 	return frappe.get_all(
-		"Leave Type", filters={"disabled": 0}, pluck="name", order_by="name", ignore_permissions=True
+		"Leave Type", filters=filters, pluck="name", order_by="name", ignore_permissions=True
 	)
 
 
