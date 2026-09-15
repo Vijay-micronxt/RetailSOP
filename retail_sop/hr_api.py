@@ -225,19 +225,28 @@ def get_pending_leave_approvals():
 
 
 @frappe.whitelist()
-def mark_attendance(date, records):
-	"""records: list of {"employee": ..., "status": ...}. Skips (rather
-	than errors out) any employee who already has a submitted Attendance
-	for that date - re-marking a submitted day isn't supported here, only
-	filling in what's still blank.
+def mark_attendance(records, date=None):
+	"""records: list of {"employee": ..., "status": ...}. `date` defaults
+	to today - deliberately the server's own notion of "today"
+	(getdate(), same as get_attendance_for_date's default), not whatever
+	date a caller computes client-side. A browser computing "today" via
+	something UTC-based (e.g. Date.toISOString()) can disagree with the
+	server's local date near midnight, which would silently write against
+	the wrong calendar day and disagree with what get_attendance_for_date
+	then shows for "today" - so this endpoint doesn't trust a
+	client-supplied date determination, only an explicit override.
+
+	Skips (rather than errors out) any employee who already has a
+	submitted Attendance for that date - re-marking a submitted day isn't
+	supported here, only filling in what's still blank.
 	"""
 	_check_auth()
 	_check_staff_role()
 
-	if not (date and records):
-		frappe.throw(_("date and records are required."))
+	if not records:
+		frappe.throw(_("records is required."))
 
-	date = getdate(date)
+	date = getdate(date) if date else getdate()
 	marked, skipped = [], []
 
 	for record in records:
