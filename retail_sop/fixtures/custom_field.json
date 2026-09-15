@@ -5,6 +5,7 @@
   "columns": 0,
   "depends_on": "",
   "description": "Which outlet this staff member works at - lets a Supervisor/Manager mark attendance for one outlet's staff at a time (retail_sop.hr_api). Optional: only meaningful for outlet floor staff, not for office/HQ employees.",
+  "doctype": "Custom Field",
   "dt": "Employee",
   "fetch_if_empty": 0,
   "fieldname": "outlet",
