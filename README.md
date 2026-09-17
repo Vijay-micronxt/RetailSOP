@@ -675,14 +675,25 @@ All of this lives in `site_config.json` (per-site, **not**
 `common_site_config.json`) — there is no other credential store, OAuth
 app registration, or bench-level secret involved.
 
-**Required** before `login()` will work at all:
-```bash
-bench --site your-site set-config retail_sop_jwt_keys '{"2026-01": "<random secret>"}' --parse
-bench --site your-site set-config retail_sop_jwt_active_kid "2026-01"
-```
-Generate the secret with e.g. `openssl rand -base64 48`. See "JWT
-signing" above for what `retail_sop_jwt_keys` being a `{kid: secret}`
-map buys you (rotation without breaking already-issued tokens).
+**Required** before `login()` will work at all — without this, every
+`login()` call fails with "JWT signing keys are not configured":
+
+1. Generate a random secret (either works; pick one):
+   ```bash
+   openssl rand -base64 48
+   # or, if openssl isn't available:
+   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+   ```
+2. Set it, with a label ("kid") of your choosing — the year-month below
+   is just a convention that makes rotation easy to track later, not a
+   required format:
+   ```bash
+   bench --site your-site set-config retail_sop_jwt_keys '{"2026-01": "<paste the generated secret here>"}' --parse
+   bench --site your-site set-config retail_sop_jwt_active_kid "2026-01"
+   ```
+
+See "JWT signing" above for what `retail_sop_jwt_keys` being a `{kid:
+secret}` map buys you (rotation without breaking already-issued tokens).
 
 **Optional**, both already have sane defaults:
 ```bash
