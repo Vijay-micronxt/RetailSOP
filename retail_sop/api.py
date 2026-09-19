@@ -408,12 +408,52 @@ def get_deviations(
 # covers the whole filtered range, never a page of it. Unpaginated is fine
 # at this app's scale (one food court, a handful of outlets); revisit if
 # that stops being true.
+#
+# Response shape is {"columns": [...], "rows": [...]} rather than a bare
+# array - `columns` is the single source of truth for which keys exist,
+# their order, and their display label. The frontend's Excel/PDF builder
+# should iterate `columns` generically (row[col.key] under col.label)
+# instead of hardcoding key names - that's what actually lets a new field
+# show up in the exported file the moment it's added here, with zero
+# frontend code change. Add a field to a row dict without also adding it
+# to `columns` and it silently won't appear in the export - the two must
+# be kept in sync by construction, which is why each row is built directly
+# from the same list COLUMNS is derived from below, not independently.
+
+
+CHECKLIST_REPORT_COLUMNS = [
+	{"key": "checklist_id", "label": "Checklist ID"},
+	{"key": "date", "label": "Date"},
+	{"key": "shift_type", "label": "Shift Type"},
+	{"key": "outlet", "label": "Outlet"},
+	{"key": "supervisor", "label": "Supervisor"},
+	{"key": "status", "label": "Status"},
+	{"key": "compliance_score", "label": "Compliance Score (%)"},
+	{"key": "total_checks", "label": "Total Checks"},
+	{"key": "failed_checks", "label": "Failed Checks"},
+]
+
+DEVIATION_REPORT_COLUMNS = [
+	{"key": "name", "label": "Deviation ID"},
+	{"key": "date", "label": "Date"},
+	{"key": "time", "label": "Time"},
+	{"key": "outlet", "label": "Outlet"},
+	{"key": "category", "label": "Category"},
+	{"key": "severity", "label": "Severity"},
+	{"key": "issue", "label": "Issue"},
+	{"key": "action_taken", "label": "Action Taken"},
+	{"key": "resolution_status", "label": "Resolution Status"},
+	{"key": "escalated_to", "label": "Escalated To"},
+	{"key": "closed_by", "label": "Closed By"},
+	{"key": "closed_on", "label": "Closed On"},
+]
 
 
 @frappe.whitelist()
 def export_checklist_report(from_date=None, to_date=None, outlet=None, workflow_state=None):
 	"""Full (unpaginated) checklist history matching the given filters, as
-	flat report rows - same filters as get_history().
+	{"columns": [...], "rows": [...]} - same filters as get_history(). See
+	the section comment above for why the shape carries column metadata.
 	"""
 	_check_auth()
 	_check_staff_role()
@@ -444,26 +484,30 @@ def export_checklist_report(from_date=None, to_date=None, outlet=None, workflow_
 		],
 		order_by="date desc",
 	)
-	return [
-		{
-			"checklist_id": r.name,
-			"date": str(r.date),
-			"shift_type": r.shift_type,
-			"outlet": r.location,
-			"supervisor": r.supervisor,
-			"status": r.workflow_state,
-			"compliance_score": r.compliance_score,
-			"total_checks": r.total_checks,
-			"failed_checks": r.failed_checks,
-		}
-		for r in rows
-	]
+	return {
+		"columns": CHECKLIST_REPORT_COLUMNS,
+		"rows": [
+			{
+				"checklist_id": r.name,
+				"date": str(r.date),
+				"shift_type": r.shift_type,
+				"outlet": r.location,
+				"supervisor": r.supervisor,
+				"status": r.workflow_state,
+				"compliance_score": r.compliance_score,
+				"total_checks": r.total_checks,
+				"failed_checks": r.failed_checks,
+			}
+			for r in rows
+		],
+	}
 
 
 @frappe.whitelist()
 def export_deviation_report(from_date=None, to_date=None, outlet=None, resolution_status=None, shift_checklist=None):
-	"""Full (unpaginated) deviations matching the given filters - same
-	filters and shape as get_deviations()/_serialize_deviation().
+	"""Full (unpaginated) deviations matching the given filters, as
+	{"columns": [...], "rows": [...]} - same filters as get_deviations(),
+	rows in the same shape _serialize_deviation() already returns.
 	"""
 	_check_auth()
 	_check_staff_role()
@@ -483,7 +527,10 @@ def export_deviation_report(from_date=None, to_date=None, outlet=None, resolutio
 	names = frappe.get_all(
 		"Checklist Deviation", filters=filters, pluck="name", order_by="date desc, creation desc"
 	)
-	return [_serialize_deviation(frappe.get_doc("Checklist Deviation", n)) for n in names]
+	return {
+		"columns": DEVIATION_REPORT_COLUMNS,
+		"rows": [_serialize_deviation(frappe.get_doc("Checklist Deviation", n)) for n in names],
+	}
 
 
 # ------------------------------ store operator -------------------------------
