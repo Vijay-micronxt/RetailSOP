@@ -400,6 +400,92 @@ def get_deviations(
 	return [_serialize_deviation(frappe.get_doc("Checklist Deviation", n)) for n in names]
 
 
+# --------------------------------- exports ------------------------------------
+# Plain JSON, same as every other endpoint in this file - the frontend
+# builds the actual xlsx/pdf client-side from this data, nothing is
+# generated server-side. Same filters as the matching read endpoint above
+# (get_history / get_deviations), just unpaginated - an export always
+# covers the whole filtered range, never a page of it. Unpaginated is fine
+# at this app's scale (one food court, a handful of outlets); revisit if
+# that stops being true.
+
+
+@frappe.whitelist()
+def export_checklist_report(from_date=None, to_date=None, outlet=None, workflow_state=None):
+	"""Full (unpaginated) checklist history matching the given filters, as
+	flat report rows - same filters as get_history().
+	"""
+	_check_auth()
+	_check_staff_role()
+
+	conditions = [["docstatus", "=", 1]]
+	if from_date:
+		conditions.append(["date", ">=", from_date])
+	if to_date:
+		conditions.append(["date", "<=", to_date])
+	if workflow_state and workflow_state != "All":
+		conditions.append(["workflow_state", "=", workflow_state])
+	if outlet and outlet != "All":
+		conditions.append(["location", "=", outlet])
+
+	rows = frappe.get_all(
+		"Shift Checklist",
+		filters=conditions,
+		fields=[
+			"name",
+			"date",
+			"shift_type",
+			"location",
+			"supervisor",
+			"workflow_state",
+			"compliance_score",
+			"total_checks",
+			"failed_checks",
+		],
+		order_by="date desc",
+	)
+	return [
+		{
+			"checklist_id": r.name,
+			"date": str(r.date),
+			"shift_type": r.shift_type,
+			"outlet": r.location,
+			"supervisor": r.supervisor,
+			"status": r.workflow_state,
+			"compliance_score": r.compliance_score,
+			"total_checks": r.total_checks,
+			"failed_checks": r.failed_checks,
+		}
+		for r in rows
+	]
+
+
+@frappe.whitelist()
+def export_deviation_report(from_date=None, to_date=None, outlet=None, resolution_status=None, shift_checklist=None):
+	"""Full (unpaginated) deviations matching the given filters - same
+	filters and shape as get_deviations()/_serialize_deviation().
+	"""
+	_check_auth()
+	_check_staff_role()
+
+	filters = {}
+	if outlet and outlet != "All":
+		filters["outlet"] = outlet
+	if resolution_status and resolution_status != "All":
+		filters["resolution_status"] = resolution_status
+	if shift_checklist:
+		filters["shift_checklist"] = shift_checklist
+	if from_date:
+		filters["date"] = [">=", from_date]
+	if to_date:
+		filters["date"] = ["between", [from_date, to_date]] if from_date else ["<=", to_date]
+
+	names = frappe.get_all(
+		"Checklist Deviation", filters=filters, pluck="name", order_by="date desc, creation desc"
+	)
+	return [_serialize_deviation(frappe.get_doc("Checklist Deviation", n)) for n in names]
+
+
 # ------------------------------ store operator -------------------------------
 # Read-only, self-scoped to the caller's own outlet - deliberately separate
 # from the supervisor/manager surface above. The Store Operator role holds
