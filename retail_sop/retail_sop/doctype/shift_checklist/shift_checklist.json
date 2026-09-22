@@ -9,6 +9,7 @@
   "naming_series",
   "date",
   "shift_type",
+  "checklist_scope",
   "location",
   "supervisor",
   "checklist_template",
@@ -46,8 +47,18 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Shift Type",
-   "options": "Pre-Opening\nService Round\nClosing",
+   "options": "Pre-Opening\nService Round\nMid-Day\nClosing\nWeekly Audit",
    "reqd": 1
+  },
+  {
+   "description": "Copied from the Checklist Template this was created from.",
+   "fieldname": "checklist_scope",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Checklist Scope",
+   "options": "Outlet\nFood Court",
+   "read_only": 1
   },
   {
    "fieldname": "location",
@@ -187,6 +198,16 @@
    "read": 1,
    "report": 1,
    "role": "Food Court Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Store Operator",
+   "submit": 1,
    "write": 1
   }
  ],

@@ -1,5 +1,5 @@
 import frappe
-from frappe.utils import get_datetime, now_datetime, today
+from frappe.utils import get_datetime, getdate, now_datetime, today
 
 
 def mark_missed_checklists():
@@ -26,7 +26,10 @@ def mark_missed_checklists():
 
 def create_daily_shift_checklists():
 	"""Scheduler event (daily): create one Draft Shift Checklist per active
-	Checklist Template, with items pre-populated from the template.
+	Checklist Template that's due today, with items pre-populated from the
+	template. A Daily-frequency template is due every day (original
+	behavior, unchanged); a Weekly-frequency one is only due on its own
+	configured weekly_day - see _is_template_due_today().
 	"""
 	template_names = frappe.get_all("Checklist Template", filters={"active": 1}, pluck="name")
 	for template_name in template_names:
@@ -40,7 +43,17 @@ def create_daily_shift_checklists():
 			)
 
 
+def _is_template_due_today(template):
+	if template.frequency != "Weekly":
+		return True
+	return getdate(today()).strftime("%A") == template.weekly_day
+
+
 def _create_shift_checklist_from_template(template_name):
+	template = frappe.get_doc("Checklist Template", template_name)
+	if not _is_template_due_today(template):
+		return
+
 	# Avoid creating a duplicate Draft for the same template on the same day
 	# if the scheduler is re-run.
 	existing = frappe.db.exists(
@@ -50,12 +63,11 @@ def _create_shift_checklist_from_template(template_name):
 	if existing:
 		return
 
-	template = frappe.get_doc("Checklist Template", template_name)
-
 	checklist = frappe.new_doc("Shift Checklist")
 	checklist.naming_series = "EXO-CHK-.YYYY.-.####"
 	checklist.date = today()
 	checklist.shift_type = template.shift_type
+	checklist.checklist_scope = template.checklist_scope
 	checklist.location = template.location
 	checklist.checklist_template = template.name
 	checklist.cutoff_time = template.cutoff_time

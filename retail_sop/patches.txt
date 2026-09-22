@@ -1,2 +1,3 @@
 retail_sop.patches.v0_0.seed_demo_checklist_template
 retail_sop.patches.v0_0.backfill_checklist_category
+retail_sop.patches.v0_0.seed_my_break_sop

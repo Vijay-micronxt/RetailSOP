@@ -38,7 +38,7 @@ internal metadata are returned directly.
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, get_datetime, now_datetime, nowtime, today
+from frappe.utils import add_days, cint, flt, get_datetime, getdate, now_datetime, nowtime, today
 
 from retail_sop.retail_sop.doctype.shift_checklist.shift_checklist import (
 	ShiftChecklistValidationError,
@@ -260,12 +260,14 @@ def get_history_status_options():
 
 
 @frappe.whitelist()
-def get_today_checklists(date=None, outlet=None, status=None, limit=None, offset=None):
+def get_today_checklists(date=None, outlet=None, status=None, checklist_scope=None, limit=None, offset=None):
 	_check_auth()
 	_check_staff_role()
 	conditions = [["date", "=", date or today()], ["docstatus", "!=", 2]]
 	if outlet and outlet != "All":
 		conditions.append(["location", "=", outlet])
+	if checklist_scope:
+		conditions.append(["checklist_scope", "=", checklist_scope])
 	# status (Draft/In Progress/Missed/Submitted/Verified/Escalated) is
 	# computed, not stored (see _computed_status) - so it's filtered here
 	# after serializing rather than in the frappe.get_all() query above.
@@ -504,7 +506,9 @@ def export_checklist_report(from_date=None, to_date=None, outlet=None, workflow_
 
 
 @frappe.whitelist()
-def export_deviation_report(from_date=None, to_date=None, outlet=None, resolution_status=None, shift_checklist=None):
+def export_deviation_report(
+	from_date=None, to_date=None, outlet=None, resolution_status=None, shift_checklist=None
+):
 	"""Full (unpaginated) deviations matching the given filters, as
 	{"columns": [...], "rows": [...]} - same filters as get_deviations(),
 	rows in the same shape _serialize_deviation() already returns.
@@ -659,7 +663,7 @@ def get_my_store_summary():
 
 
 @frappe.whitelist()
-def get_my_store_checklists(date=None):
+def get_my_store_checklists(date=None, limit=None, offset=None):
 	"""Shift Checklists (default: today's) for the single Outlet the calling
 	user is the store_operator of - the Store Operator equivalent of
 	get_today_checklists(), scoped to their one store instead of every
@@ -671,16 +675,20 @@ def get_my_store_checklists(date=None):
 	"""
 	_check_auth()
 
-	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
-	if not outlet:
-		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+	outlet = _get_my_outlet()
 
+	kwargs = {}
+	if limit:
+		kwargs["limit_page_length"] = cint(limit)
+	if offset:
+		kwargs["limit_start"] = cint(offset)
 	names = frappe.get_all(
 		"Shift Checklist",
 		filters={"location": outlet, "date": date or today(), "docstatus": ["!=", 2]},
 		pluck="name",
 		order_by="creation desc",
 		ignore_permissions=True,
+		**kwargs,
 	)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
@@ -744,7 +752,135 @@ def get_dashboard_data():
 	}
 
 
+@frappe.whitelist()
+def get_outlet_closing_status(date=None):
+	"""For every active Outlet: whether an Outlet-scope Closing checklist
+	exists for `date` (today if omitted) and what state it's in - backs
+	the food-court-wide Closing checklist's per-outlet status table
+	(source SOP: "Outlet | Closing Checklist Done | Sales Closed | Kitchen
+	Closed | Issue"). Deliberately **read-only reference data derived from
+	each outlet's own QSR-level submission**, not a second place to
+	manually re-enter the same information - see backend README §8.
+
+	This app doesn't separately track "sales closed"/"kitchen closed" as
+	distinct facts (only whether the Closing checklist itself was
+	submitted/verified), so those two sub-columns from the source sheet
+	collapse into one `status` here - flagged as a simplification, not a
+	gap: splitting them out would need new fields on Shift Checklist with
+	no current use beyond mirroring this one table.
+	"""
+	_check_auth()
+	_check_staff_role()
+	date = getdate(date) if date else getdate()
+
+	outlets = frappe.get_all("Outlet", filters={"active": 1}, fields=["name", "outlet_name"])
+	checklists = frappe.get_all(
+		"Shift Checklist",
+		filters={
+			"checklist_scope": "Outlet",
+			"shift_type": "Closing",
+			"date": date,
+			"docstatus": ["!=", 2],
+		},
+		fields=["location", "docstatus", "workflow_state", "failed_checks"],
+	)
+	by_outlet = {c.location: c for c in checklists}
+
+	rows = []
+	for outlet in outlets:
+		checklist = by_outlet.get(outlet.name)
+		if not checklist:
+			status = "Not Started"
+		elif checklist.docstatus == 0:
+			status = "In Progress"
+		elif checklist.workflow_state == "Verified":
+			status = "Verified"
+		elif checklist.failed_checks:
+			status = "Submitted (Issues Found)"
+		else:
+			status = "Submitted"
+		rows.append({"outlet": outlet.outlet_name, "status": status})
+	return rows
+
+
+@frappe.whitelist()
+def get_outlet_scorecard(from_date=None, to_date=None):
+	"""Per-outlet average compliance_score and deviation count over
+	[from_date, to_date] (defaults to the last 7 days) - backs the
+	food-court-wide Weekly checklist's outlet scorecard, same
+	derived-not-manually-filled approach as get_outlet_closing_status().
+
+	The source sheet's scorecard splits this into separate Hygiene/Staff/
+	Food Safety/Operations columns per outlet. This app's checklist
+	categories are open-ended (any business can add its own via the
+	Checklist Category doctype, see README §8) rather than a fixed small
+	set, so there's no reliable way to bucket every category into exactly
+	those four columns without hardcoding one business's taxonomy back
+	into this endpoint - flagged as a deliberate simplification: one
+	blended compliance score per outlet, not a category breakdown.
+	"""
+	_check_auth()
+	_check_staff_role()
+	to_date = getdate(to_date) if to_date else getdate()
+	from_date = getdate(from_date) if from_date else add_days(to_date, -6)
+
+	outlets = frappe.get_all("Outlet", filters={"active": 1}, fields=["name", "outlet_name"])
+	checklists = frappe.get_all(
+		"Shift Checklist",
+		filters={
+			"checklist_scope": "Outlet",
+			"docstatus": 1,
+			"date": ["between", [from_date, to_date]],
+		},
+		fields=["location", "compliance_score"],
+	)
+	deviations = frappe.get_all(
+		"Checklist Deviation",
+		filters={"date": ["between", [from_date, to_date]]},
+		fields=["outlet"],
+	)
+
+	scores_by_outlet = {}
+	for c in checklists:
+		scores_by_outlet.setdefault(c.location, []).append(c.compliance_score or 0)
+	issues_by_outlet = {}
+	for d in deviations:
+		issues_by_outlet[d.outlet] = issues_by_outlet.get(d.outlet, 0) + 1
+
+	rows = []
+	for outlet in outlets:
+		scores = scores_by_outlet.get(outlet.name, [])
+		compliance = round(sum(scores) / len(scores), 2) if scores else None
+		rows.append(
+			{
+				"outlet": outlet.outlet_name,
+				"compliance": compliance,
+				"issues": issues_by_outlet.get(outlet.name, 0),
+			}
+		)
+	return rows
+
+
 # --------------------------------- writes ------------------------------------
+
+
+def _check_checklist_write_access(doc):
+	"""Frappe's own doctype permission check (already run by doc.save()/
+	doc.submit() below) only knows "this role can write Shift Checklist" -
+	it has no idea *which* checklist, so on its own it can't enforce the
+	clean split: Food Court Supervisor fills only Food-Court-scope
+	checklists, Store Operator fills only their own outlet's Outlet-scope
+	ones. This is the actual gate, same app-layer-enforcement pattern as
+	_check_staff_role() elsewhere in this module.
+	"""
+	roles = set(frappe.get_roles(frappe.session.user))
+	if "System Manager" in roles:
+		return
+	if "Food Court Supervisor" in roles and doc.checklist_scope == "Food Court":
+		return
+	if "Store Operator" in roles and doc.checklist_scope == "Outlet" and doc.location == _get_my_outlet():
+		return
+	frappe.throw(_("Not permitted."), frappe.PermissionError)
 
 
 @frappe.whitelist()
@@ -752,6 +888,7 @@ def save_checklist_row(checklist_name, sr_no, status=None, reading=None, remarks
 	_check_auth()
 
 	doc = frappe.get_doc("Shift Checklist", checklist_name)
+	_check_checklist_write_access(doc)
 	if doc.docstatus != 0:
 		frappe.throw(_("Cannot update items on a submitted or cancelled Shift Checklist."))
 
@@ -785,6 +922,7 @@ def submit_checklist(name):
 	_check_auth()
 
 	doc = frappe.get_doc("Shift Checklist", name)
+	_check_checklist_write_access(doc)
 	try:
 		doc.submit()
 	except ShiftChecklistValidationError as e:

@@ -124,6 +124,29 @@ value, numeric min/max thresholds, and flags — `is_mandatory`,
 escalate to (`escalate_to_type`: User or Role, with a matching `Dynamic
 Link` field).
 
+Two more fields decide **who fills it and how often**:
+- **`checklist_scope`** — `Outlet` (applies to one specific outlet;
+  `location` is required) or `Food Court` (applies to the whole food
+  court at once; `location` must be blank). Enforced by
+  `ChecklistTemplate.validate()`. This is what separates a single
+  outlet's own daily checks from a food-court-wide round covering every
+  outlet — see §4 for who fills which.
+- **`frequency`** — `Daily` (original behavior, unchanged) or `Weekly`,
+  paired with `weekly_day` (Monday–Sunday, required when Weekly) that
+  picks which day of the week the scheduler creates it on — see §5.
+
+**Importing your own checklist content**: this doctype (plus its
+`Checklist Template Item` child table and `Checklist Category` master)
+is designed to be populated via Frappe's built-in **Data Import** tool
+(Desk → Data Import), including bulk child-table rows and
+auto-creating any `Checklist Category` that doesn't exist yet — no
+bespoke upload screen or parser needed, and it works the same way for
+any business's own checklist content, not just the one shipped with
+this app (see `patches/v0_0/seed_my_break_sop.py` for a full worked
+example of the shape a template + its items take). Remember
+`checklist_scope` and `frequency` are both required fields now, so an
+imported template needs them set or the import row fails validation.
+
 ### Shift Checklist (submittable) → Shift Checklist Item (child)
 One execution instance of a template for a given date/shift. Naming
 series `EXO-CHK-.YYYY.-.####`. Each item row is linked back to its
@@ -131,7 +154,10 @@ template row via a hidden `template_item` field, and `sr_no`,
 `check_description`, `category`, `standard` are populated via Frappe's
 `fetch_from` mechanism — set once when the row is created, read-only
 after. `compliance_score`, `total_checks`, and `failed_checks` are
-computed server-side on every save (see §5).
+computed server-side on every save (see §5). `checklist_scope` is
+copied from the template at creation time (read-only), so
+scope-scoped access checks (§4) don't need to join back to the
+template on every read/write.
 
 ### Checklist Deviation (submittable)
 An issue raised either automatically (by a failed, escalate-on-fail
@@ -149,26 +175,52 @@ Four roles, on top of the standard `System Manager`:
 | **System Manager** | full CRUD | full CRUD + submit/cancel/amend | full CRUD + submit/cancel/amend |
 | **Food Court Supervisor** | read-only | create, read, write, **submit** | create, read, write, submit |
 | **Food Court Manager** | read + report | read, write (to Verify) + report | full CRUD + submit/cancel/amend |
-| **Store Operator** | none | none | none |
+| **Store Operator** | none | create, read, write, **submit** | none |
 
-`Store Operator` deliberately holds **no doctype-level permission** on
-any of these — it's not a smaller version of Supervisor/Manager, it's a
-narrow, code-scoped view onto one outlet's data. It can authenticate
-(§12) and call exactly one endpoint,
-[`get_my_store_summary()`](#8-whitelisted-api-retail_sopapipy), which
-looks up the single `Outlet` where `store_operator` = that user and
-returns only that outlet's Hygiene-category check results and an
-overall rating — nothing else, and no other outlet's data. It also has
-`desk_access: 0` (unlike the other two roles), since it's meant purely
-for this one read-only view, not Desk use.
+The native `Shift Checklist` permission rows above are deliberately
+**coarse** — they only say "this role may write *a* Shift Checklist,"
+not *which one*. The real, fine-grained gate is app-layer, in `api.py`:
 
-One consequence worth knowing: because Store Operator has no read
-permission on `Shift Checklist`, calling one of the broader endpoints in
-§8 (`get_today_checklists`, `get_deviations`, etc.) as a Store Operator
-doesn't error — Frappe's permission-filtered `get_all` just silently
-returns an empty list. No data leaks either way, but it's a quiet empty
-result rather than an explicit rejection; worth keeping in mind if this
-ever needs to change to a hard error instead.
+- **Food Court Supervisor** fills only `checklist_scope = "Food Court"`
+  checklists — the whole-food-court rounds (Opening/Mid-Day/Closing/
+  Weekly), covering every outlet at once.
+- **Store Operator** fills only `checklist_scope = "Outlet"` checklists
+  whose `location` is the single `Outlet` they're the `store_operator`
+  of (looked up via `_get_my_outlet()`, never trusted from the client).
+- Neither role can touch the other's checklists even though both hold
+  native `write`/`submit` on the doctype — `save_checklist_row()` and
+  `submit_checklist()` both call `_check_checklist_write_access()`
+  first and throw `PermissionError` on a scope/outlet mismatch, the same
+  app-layer-enforcement pattern `_check_staff_role()` already uses
+  elsewhere in this file. This is a deliberate **clean split**, not
+  incidental — once outlet staff can fill their own checklists, a
+  Supervisor is no longer meant to fill per-outlet ones too.
+- **Food Court Manager** still never creates/submits either kind —
+  verify-only, unchanged.
+
+`Store Operator` additionally has its own narrow, code-scoped read
+surface (unrelated to the Shift Checklist write access above): it can
+authenticate (§12) and call
+[`get_my_store_summary()`](#8-whitelisted-api-retail_sopapipy)/
+`get_my_store_checklists()`/`get_my_store_history()` — all scoped to
+the single `Outlet` where `store_operator` = that user, never any other
+outlet's data. It has `desk_access: 0` (unlike the other two roles).
+
+Store Operator's native `Shift Checklist` permission row does include
+`read` (mirroring Supervisor's, since the same coarse doctype-level
+grant has to cover both roles' writes) — but every broader endpoint in
+§8 meant for Supervisor/Manager (`get_today_checklists`,
+`get_verification_queue`, the report exports, etc.) calls
+`_check_staff_role()` first, which explicitly rejects a Store Operator
+caller with `PermissionError` regardless of the native grant. `Checklist
+Deviation` is a separate story: Store Operator holds **no** native
+permission there at all, and `get_deviations()`/`create_deviation()`
+don't call `_check_staff_role()` — so a Store Operator calling those
+doesn't error, Frappe's permission-filtered `get_all` just silently
+returns an empty list (or, for `create_deviation`, would fail at
+`doc.insert()`'s own permission check). No data leaks either way, but
+it's a quieter failure mode than the explicit rejection above; worth
+keeping in mind if this ever needs to change to a hard error instead.
 
 `Food Court Supervisor`, `Food Court Manager`, and `Store Operator` are
 all shipped as a [Role fixture](retail_sop/fixtures/role.json) so they
@@ -182,9 +234,14 @@ done per-outlet in Desk).
 
 ### Daily scheduler — `retail_sop.tasks.create_daily_shift_checklists`
 Registered in `hooks.py` under `scheduler_events.daily`. For every active
-`Checklist Template`, creates one `Shift Checklist` in Draft status dated
-today, with one item row per template row (skips if a checklist for that
-template/date already exists, so re-running the scheduler is safe).
+`Checklist Template` that's **due today**, creates one `Shift Checklist`
+in Draft status dated today, with one item row per template row (skips
+if a checklist for that template/date already exists, so re-running the
+scheduler is safe). "Due today" (`_is_template_due_today()`) is always
+true for a `Daily`-frequency template (original behavior, unchanged);
+for a `Weekly`-frequency one, only when today's weekday matches its own
+`weekly_day` — each template picks its own day independently rather
+than a single hardcoded day for the whole site.
 
 ### `ShiftChecklist.validate()` — single source of truth
 Runs on every save, including submit (Frappe sets `docstatus=1` *before*
@@ -304,7 +361,9 @@ via `fetch()`/`callMethod()`; there's no mock data left in that app.
 |---|---|---|
 | `listOutlets()` | `list_outlets()` | Active `Outlet` records |
 | `listCategories()` | `list_categories()` | Active `Checklist Category` records — single source of truth |
-| `getTodayChecklists()` | `get_today_checklists()` | Full checklists (with items), not a summary list |
+| `getTodayChecklists()` | `get_today_checklists(date=None, outlet=None, status=None, checklist_scope=None, limit=None, offset=None)` | Full checklists (with items), not a summary list. `checklist_scope` filters to `"Outlet"`/`"Food Court"` — the frontend Today screen passes `"Food Court"` for Supervisor now that Store Operator owns the outlet-level ones (§4) |
+| `getOutletClosingStatus()` | `get_outlet_closing_status(date=None)` | Per-active-outlet Closing status, **derived** from that outlet's own submitted QSR-Closing checklist — not a second place to manually re-enter it. Supervisor/Manager only |
+| `getOutletScorecard()` | `get_outlet_scorecard(from_date=None, to_date=None)` | Per-active-outlet average `compliance_score` + deviation count over a date range (defaults to the last 7 days), same derived-not-re-entered approach. Supervisor/Manager only |
 | `getChecklist(name)` | `get_checklist(name)` | `None` if not found |
 | `getHistory(from, to)` | `get_history(from_date=None, to_date=None)` | Submitted checklists (any workflow state) in range |
 | `getHistoryChart(from, to, status, outlet)` | `get_history_chart(from_date=None, to_date=None, workflow_state=None, outlet=None)` | Average `compliance_score` per date, same filters as `get_history()` — backs the History screen's trend chart, unpaginated (the point is the whole filtered range, not one page of it) |
