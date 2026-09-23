@@ -24,7 +24,7 @@ class ShiftChecklistValidationError(frappe.ValidationError):
 class ShiftChecklist(Document):
 	def validate(self):
 		self.validate_date_not_backdated()
-		self.sync_cutoff_time_from_template()
+		self.sync_fields_from_template()
 		self.enforce_workflow_state_transition()
 		self.apply_numeric_range_checks()
 		self.compute_summary()
@@ -32,6 +32,7 @@ class ShiftChecklist(Document):
 		if self.docstatus == 1:
 			self.enforce_not_missed()
 			self.enforce_submit_rules()
+			self.enforce_completion_confirmed()
 
 	def on_submit(self):
 		if self.workflow_state == "Draft":
@@ -55,19 +56,29 @@ class ShiftChecklist(Document):
 			frappe.throw(_("Date cannot be changed once the Shift Checklist has been created."))
 
 	# ------------------------------------------------------------------
-	# cutoff_time is always re-derived from the linked Checklist Template
-	# here, every save - never trusted from whatever the client (Desk form
-	# or an API payload) sent in. This is what actually stops a stray value
-	# (an empty Time-picker widget defaulting to "now" on manual creation,
-	# a Duplicate action copying an old doc's value, or any other path that
-	# bypasses tasks.py's own copy) from sticking - the field's true source
-	# of truth is the template, full stop, checked fresh every time.
+	# cutoff_time, checklist_scope and location are always re-derived from
+	# the linked Checklist Template here, every save - never trusted from
+	# whatever the client (Desk form or an API payload) sent in. This is
+	# what actually stops a stray/mismatched value (fields left at their
+	# defaults on manual creation, a Duplicate action copying an old doc's
+	# values, or any other path that bypasses tasks.py's own copy) from
+	# sticking - the template is the true source of truth for all three,
+	# full stop, checked fresh every time. Without this, a manually-created
+	# checklist could end up with e.g. checklist_scope="Outlet" while
+	# linked to a Food Court template, which then fails
+	# _check_checklist_write_access() in api.py for everyone.
 	# ------------------------------------------------------------------
-	def sync_cutoff_time_from_template(self):
+	def sync_fields_from_template(self):
 		if self.checklist_template:
-			self.cutoff_time = frappe.db.get_value(
-				"Checklist Template", self.checklist_template, "cutoff_time"
+			template = frappe.db.get_value(
+				"Checklist Template",
+				self.checklist_template,
+				["cutoff_time", "checklist_scope", "location"],
+				as_dict=True,
 			)
+			self.cutoff_time = template.cutoff_time
+			self.checklist_scope = template.checklist_scope
+			self.location = template.location
 		else:
 			self.cutoff_time = None
 
@@ -84,25 +95,37 @@ class ShiftChecklist(Document):
 		if not before or before.workflow_state == self.workflow_state:
 			return
 
-		allowed_transitions = {
-			("Draft", "Submitted"): "Food Court Supervisor",
-			("Submitted", "Verified"): "Food Court Manager",
-		}
-		required_role = allowed_transitions.get((before.workflow_state, self.workflow_state))
-		if not required_role:
-			frappe.throw(
-				_("Invalid workflow transition from {0} to {1}.").format(
-					before.workflow_state, self.workflow_state
-				)
-			)
+		transition = (before.workflow_state, self.workflow_state)
+		user_roles = set(frappe.get_roles(frappe.session.user))
+		if "System Manager" in user_roles:
+			return
 
-		user_roles = frappe.get_roles(frappe.session.user)
-		if required_role not in user_roles and "System Manager" not in user_roles:
-			frappe.throw(
-				_("You need the {0} role to move this Shift Checklist to {1}.").format(
-					required_role, self.workflow_state
+		if transition == ("Draft", "Submitted"):
+			# Who may submit depends on checklist_scope, same split as
+			# api.py::_check_checklist_write_access() - Food Court Supervisor
+			# for a Food Court-scope checklist, Store Operator only for their
+			# own outlet's Outlet-scope one. Not imported from api.py to avoid
+			# a circular import (api.py already imports from this module).
+			if self.checklist_scope == "Food Court" and "Food Court Supervisor" in user_roles:
+				return
+			if self.checklist_scope == "Outlet" and "Store Operator" in user_roles:
+				my_outlet = frappe.db.get_value(
+					"Outlet", {"store_operator": frappe.session.user}, "outlet_name"
 				)
+				if self.location == my_outlet:
+					return
+			frappe.throw(_("You are not permitted to submit this Shift Checklist."))
+
+		if transition == ("Submitted", "Verified"):
+			if "Food Court Manager" in user_roles:
+				return
+			frappe.throw(_("You need the Food Court Manager role to verify this Shift Checklist."))
+
+		frappe.throw(
+			_("Invalid workflow transition from {0} to {1}.").format(
+				before.workflow_state, self.workflow_state
 			)
+		)
 
 	# ------------------------------------------------------------------
 	# Numeric range validation
@@ -157,6 +180,24 @@ class ShiftChecklist(Document):
 				_(
 					"The cutoff time for this checklist ({0}) has passed - it is marked Missed and can no longer be submitted."
 				).format(self.cutoff_time)
+			)
+
+	# ------------------------------------------------------------------
+	# Sign-off - "I confirm that I have personally completed the above
+	# checks and the information submitted is correct" (repeated on every
+	# checklist type in the source sheet). A paper-trail/accountability
+	# requirement, not a data-quality check - who submitted and when is
+	# already recorded by Frappe itself (owner/creation); this just makes
+	# that confirmation an explicit, required step rather than implicit in
+	# clicking Submit.
+	# ------------------------------------------------------------------
+	def enforce_completion_confirmed(self):
+		if not self.completion_confirmed:
+			frappe.throw(
+				_(
+					"Please confirm you have personally completed this checklist and the "
+					"information submitted is correct before submitting."
+				)
 			)
 
 	# ------------------------------------------------------------------
@@ -247,13 +288,14 @@ class ShiftChecklist(Document):
 			deviation.shift_checklist = self.name
 			deviation.outlet = self.location
 			deviation.category = row.category or template_item.category
-			# Default severity for auto-raised deviations. Not specified by
-			# the brief - assumed "Medium"; adjust here if a different
-			# default (or per-category default) is wanted.
-			deviation.severity = "Medium"
+			deviation.severity = template_item.severity or "Medium"
 			deviation.issue = _("Auto-raised: '{0}' failed during {1}.").format(
 				row.check_description, self.name
 			)
+			# Carry over the row's own evidence photo, if one was attached -
+			# an auto-raised deviation with a required-photo item behind it
+			# otherwise ends up with no evidence at all.
+			deviation.photo = row.attachment
 			if template_item.escalate_to_type == "User" and template_item.escalate_to:
 				deviation.escalated_to = template_item.escalate_to
 			elif template_item.escalate_to_type == "Role" and template_item.escalate_to:

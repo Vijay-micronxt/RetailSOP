@@ -23,6 +23,8 @@
   "compliance_score",
   "total_checks",
   "failed_checks",
+  "section_break_confirmation",
+  "completion_confirmed",
   "section_break_items",
   "items"
  ],
@@ -144,6 +146,17 @@
    "fieldtype": "Int",
    "label": "Failed Checks",
    "read_only": 1
+  },
+  {
+   "fieldname": "section_break_confirmation",
+   "fieldtype": "Section Break",
+   "label": "Confirmation"
+  },
+  {
+   "description": "I confirm that I have personally completed the above checks and the information submitted is correct. Required before this checklist can be submitted.",
+   "fieldname": "completion_confirmed",
+   "fieldtype": "Check",
+   "label": "Completion Confirmed"
   },
   {
    "fieldname": "section_break_items",
