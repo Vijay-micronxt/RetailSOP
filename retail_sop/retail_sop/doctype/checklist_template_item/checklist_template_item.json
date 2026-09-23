@@ -10,6 +10,8 @@
   "check_description",
   "category",
   "input_type",
+  "positive_label",
+  "negative_label",
   "standard",
   "column_break_ranges",
   "min_value",
@@ -20,6 +22,7 @@
   "escalate_on_fail",
   "vendor_specific",
   "column_break_escalation",
+  "severity",
   "escalate_to_type",
   "escalate_to"
  ],
@@ -50,6 +53,20 @@
    "in_list_view": 1,
    "label": "Input Type",
    "options": "Tick\nNumeric\nText\nPhoto"
+  },
+  {
+   "depends_on": "eval:doc.input_type=='Tick'",
+   "description": "Overrides the default \"OK\" label for this item's positive answer - e.g. \"Yes\" or \"Available\". Leave blank to use the default.",
+   "fieldname": "positive_label",
+   "fieldtype": "Data",
+   "label": "Positive Answer Label"
+  },
+  {
+   "depends_on": "eval:doc.input_type=='Tick'",
+   "description": "Overrides the default \"Not OK\" label for this item's negative answer - e.g. \"No\" or \"Not Available\". Leave blank to use the default.",
+   "fieldname": "negative_label",
+   "fieldtype": "Data",
+   "label": "Negative Answer Label"
   },
   {
    "fieldname": "standard",
@@ -103,6 +120,15 @@
   {
    "fieldname": "column_break_escalation",
    "fieldtype": "Column Break"
+  },
+  {
+   "default": "Medium",
+   "depends_on": "eval:doc.escalate_on_fail",
+   "description": "Severity set on the Checklist Deviation auto-raised when this item fails.",
+   "fieldname": "severity",
+   "fieldtype": "Select",
+   "label": "Severity",
+   "options": "Low\nMedium\nHigh\nCritical"
   },
   {
    "default": "Role",

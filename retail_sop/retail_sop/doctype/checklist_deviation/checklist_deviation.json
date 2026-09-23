@@ -17,6 +17,10 @@
   "issue",
   "action_taken",
   "photo",
+  "section_break_responsibility",
+  "responsible_person",
+  "column_break_responsibility",
+  "expected_resolution_time",
   "section_break_escalation",
   "escalated_to",
   "escalation_datetime",
@@ -97,6 +101,29 @@
    "fieldname": "photo",
    "fieldtype": "Attach Image",
    "label": "Photo"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "section_break_responsibility",
+   "fieldtype": "Section Break",
+   "label": "Responsibility"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "responsible_person",
+   "fieldtype": "Link",
+   "label": "Responsible Person",
+   "options": "User"
+  },
+  {
+   "fieldname": "column_break_responsibility",
+   "fieldtype": "Column Break"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "expected_resolution_time",
+   "fieldtype": "Datetime",
+   "label": "Expected Resolution Time"
   },
   {
    "fieldname": "section_break_escalation",

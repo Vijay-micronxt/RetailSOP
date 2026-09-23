@@ -62,6 +62,7 @@ CRITICAL = {
 	"escalate_on_fail": 1,
 	"escalate_to_type": "Role",
 	"escalate_to": "Food Court Manager",
+	"severity": "Critical",
 }
 
 
@@ -913,7 +914,13 @@ def _ensure_categories(items):
 
 def _append_items(template_doc, items):
 	for sr_no, item in enumerate(items, start=1):
-		template_doc.append("items", {**item, "sr_no": sr_no})
+		# Every item requires a photo on a "Not OK" answer, not just the
+		# CRITICAL-flagged subset - "If any answer is NO, the manager must
+		# enter: Issue / Photo: Upload / ..." (QSR-Opening Sec 10, Issue
+		# Reporting - the same rule repeats on every checklist type in the
+		# sheet). Existing sites get this backfilled separately - see
+		# patches/v0_0/backfill_requires_photo.py.
+		template_doc.append("items", {**item, "sr_no": sr_no, "requires_photo": 1})
 
 
 def _create_template(template_name, location, spec):

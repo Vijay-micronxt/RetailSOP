@@ -82,6 +82,12 @@ def _format_time(value):
 # of a hardcoded copy drifting out of sync with the backend.
 CHECKLIST_STATUS_OPTIONS = ["Draft", "In Progress", "Missed", "Submitted", "Verified", "Escalated"]
 
+# Same idea as CHECKLIST_STATUS_OPTIONS - kept here as the one source of
+# truth for a shift-type filter dropdown, instead of a copy hardcoded on the
+# frontend that could drift from the Shift Checklist doctype's own Select
+# options.
+SHIFT_TYPE_OPTIONS = ["Pre-Opening", "Service Round", "Mid-Day", "Closing", "Weekly Audit"]
+
 
 def _computed_status(doc):
 	"""Maps our docstatus/workflow_state onto the frontend's ChecklistStatus
@@ -126,7 +132,15 @@ def _serialize_checklist(doc):
 			frappe.db.get_value(
 				"Checklist Template Item",
 				row.template_item,
-				["input_type", "min_value", "max_value", "is_mandatory", "requires_photo"],
+				[
+					"input_type",
+					"min_value",
+					"max_value",
+					"is_mandatory",
+					"requires_photo",
+					"positive_label",
+					"negative_label",
+				],
 				as_dict=True,
 			)
 			if row.template_item
@@ -143,6 +157,13 @@ def _serialize_checklist(doc):
 				"max_value": template_item.max_value if template_item else None,
 				"is_mandatory": 1 if (template_item and template_item.is_mandatory) else 0,
 				"requires_photo": 1 if (template_item and template_item.requires_photo) else 0,
+				# Per-item override of the generic "OK"/"Not OK" button wording
+				# (e.g. "Available"/"Not Available") - the sheet uses different
+				# wording per section even though the underlying OK/Not OK/NA
+				# value stored is always the same. None/blank means "use the
+				# default", not "no answer".
+				"positive_label": (template_item.positive_label if template_item else None) or None,
+				"negative_label": (template_item.negative_label if template_item else None) or None,
 				"status": row.status or None,
 				"reading": row.reading,
 				"checked_at": _format_time(row.checked_at),
@@ -157,12 +178,14 @@ def _serialize_checklist(doc):
 		"name": doc.name,
 		"date": str(doc.date),
 		"shift_type": doc.shift_type,
+		"checklist_scope": doc.checklist_scope,
 		"location": doc.location,
 		"supervisor": doc.supervisor,
 		"status": _computed_status(doc),
 		"compliance_score": doc.compliance_score,
 		"total_checks": doc.total_checks,
 		"failed_checks": doc.failed_checks,
+		"completion_confirmed": 1 if doc.completion_confirmed else 0,
 		"items": items,
 	}
 
@@ -182,6 +205,8 @@ def _serialize_deviation(doc):
 		"escalated_to": doc.escalated_to,
 		"closed_by": doc.closed_by,
 		"closed_on": str(doc.closed_on) if doc.closed_on else None,
+		"responsible_person": doc.responsible_person,
+		"expected_resolution_time": str(doc.expected_resolution_time) if doc.expected_resolution_time else None,
 	}
 
 
@@ -236,6 +261,16 @@ def get_checklist_status_options():
 
 
 @frappe.whitelist()
+def get_shift_type_options():
+	"""The full set of Shift Checklist shift_type values, for populating a
+	shift-type filter dropdown (e.g. isolating "Weekly Audit" from the daily
+	shift types) - see SHIFT_TYPE_OPTIONS.
+	"""
+	_check_auth()
+	return SHIFT_TYPE_OPTIONS
+
+
+@frappe.whitelist()
 def get_deviation_resolution_status_options():
 	"""Checklist Deviation.resolution_status's Select options, read straight
 	from the doctype's own field metadata - genuinely live, so even a
@@ -260,7 +295,9 @@ def get_history_status_options():
 
 
 @frappe.whitelist()
-def get_today_checklists(date=None, outlet=None, status=None, checklist_scope=None, limit=None, offset=None):
+def get_today_checklists(
+	date=None, outlet=None, status=None, checklist_scope=None, shift_type=None, limit=None, offset=None
+):
 	_check_auth()
 	_check_staff_role()
 	conditions = [["date", "=", date or today()], ["docstatus", "!=", 2]]
@@ -268,6 +305,8 @@ def get_today_checklists(date=None, outlet=None, status=None, checklist_scope=No
 		conditions.append(["location", "=", outlet])
 	if checklist_scope:
 		conditions.append(["checklist_scope", "=", checklist_scope])
+	if shift_type and shift_type != "All":
+		conditions.append(["shift_type", "=", shift_type])
 	# status (Draft/In Progress/Missed/Submitted/Verified/Escalated) is
 	# computed, not stored (see _computed_status) - so it's filtered here
 	# after serializing rather than in the frappe.get_all() query above.
@@ -294,7 +333,9 @@ def get_checklist(name):
 
 
 @frappe.whitelist()
-def get_history(from_date=None, to_date=None, workflow_state=None, outlet=None, limit=50, offset=0):
+def get_history(
+	from_date=None, to_date=None, workflow_state=None, outlet=None, shift_type=None, limit=50, offset=0
+):
 	_check_auth()
 	_check_staff_role()
 	conditions = [["docstatus", "=", 1]]
@@ -306,6 +347,8 @@ def get_history(from_date=None, to_date=None, workflow_state=None, outlet=None, 
 		conditions.append(["workflow_state", "=", workflow_state])
 	if outlet and outlet != "All":
 		conditions.append(["location", "=", outlet])
+	if shift_type and shift_type != "All":
+		conditions.append(["shift_type", "=", shift_type])
 	names = _get_checklist_names(conditions, "date desc", limit, offset)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
@@ -355,7 +398,7 @@ def get_history_chart(from_date=None, to_date=None, workflow_state=None, outlet=
 
 
 @frappe.whitelist()
-def get_verification_queue(outlet=None, from_date=None, to_date=None, limit=50, offset=0):
+def get_verification_queue(outlet=None, from_date=None, to_date=None, shift_type=None, limit=50, offset=0):
 	_check_auth()
 	_check_staff_role()
 	conditions = [["docstatus", "=", 1], ["workflow_state", "!=", "Verified"]]
@@ -365,6 +408,8 @@ def get_verification_queue(outlet=None, from_date=None, to_date=None, limit=50, 
 		conditions.append(["date", ">=", from_date])
 	if to_date:
 		conditions.append(["date", "<=", to_date])
+	if shift_type and shift_type != "All":
+		conditions.append(["shift_type", "=", shift_type])
 	names = _get_checklist_names(conditions, "date asc", limit, offset)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
@@ -380,6 +425,7 @@ def get_deviations(
 	offset=0,
 ):
 	_check_auth()
+	_check_staff_role()
 	filters = {}
 	if outlet and outlet != "All":
 		filters["outlet"] = outlet
@@ -444,6 +490,8 @@ DEVIATION_REPORT_COLUMNS = [
 	{"key": "severity", "label": "Severity"},
 	{"key": "issue", "label": "Issue"},
 	{"key": "action_taken", "label": "Action Taken"},
+	{"key": "responsible_person", "label": "Responsible Person"},
+	{"key": "expected_resolution_time", "label": "Expected Resolution Time"},
 	{"key": "resolution_status", "label": "Resolution Status"},
 	{"key": "escalated_to", "label": "Escalated To"},
 	{"key": "closed_by", "label": "Closed By"},
@@ -663,7 +711,7 @@ def get_my_store_summary():
 
 
 @frappe.whitelist()
-def get_my_store_checklists(date=None, limit=None, offset=None):
+def get_my_store_checklists(date=None, shift_type=None, limit=None, offset=None):
 	"""Shift Checklists (default: today's) for the single Outlet the calling
 	user is the store_operator of - the Store Operator equivalent of
 	get_today_checklists(), scoped to their one store instead of every
@@ -682,9 +730,12 @@ def get_my_store_checklists(date=None, limit=None, offset=None):
 		kwargs["limit_page_length"] = cint(limit)
 	if offset:
 		kwargs["limit_start"] = cint(offset)
+	filters = {"location": outlet, "date": date or today(), "docstatus": ["!=", 2]}
+	if shift_type and shift_type != "All":
+		filters["shift_type"] = shift_type
 	names = frappe.get_all(
 		"Shift Checklist",
-		filters={"location": outlet, "date": date or today(), "docstatus": ["!=", 2]},
+		filters=filters,
 		pluck="name",
 		order_by="creation desc",
 		ignore_permissions=True,
@@ -914,15 +965,26 @@ def save_checklist_row(checklist_name, sr_no, status=None, reading=None, remarks
 
 
 @frappe.whitelist()
-def submit_checklist(name):
+def submit_checklist(name, confirmed=False):
 	"""Validation (mandatory/photo/completeness rules) lives entirely in
 	ShiftChecklist.validate() - this just calls submit() and reshapes
 	whatever it raised into the frontend's SubmitResponse shape.
+
+	confirmed: the frontend's "I confirm I have personally completed this
+	checklist" checkbox - see ShiftChecklist.enforce_completion_confirmed().
 	"""
 	_check_auth()
 
 	doc = frappe.get_doc("Shift Checklist", name)
 	_check_checklist_write_access(doc)
+	doc.completion_confirmed = 1 if cint(confirmed) else 0
+	# Explicitly driving workflow_state (same pattern as verify_checklist()
+	# below) rather than leaving it to on_submit()'s after-the-fact
+	# db_set() - that ran too late for
+	# ShiftChecklist.enforce_workflow_state_transition() to ever see the
+	# Draft->Submitted transition, silently turning that check into dead
+	# code. Setting it here makes the backstop actually fire.
+	doc.workflow_state = "Submitted"
 	try:
 		doc.submit()
 	except ShiftChecklistValidationError as e:
@@ -950,8 +1012,28 @@ def verify_checklist(name):
 
 
 @frappe.whitelist()
-def create_deviation(outlet, category, severity, issue, action_taken, photo=None):
+def create_deviation(
+	outlet,
+	category,
+	severity,
+	issue,
+	action_taken,
+	photo=None,
+	responsible_person=None,
+	expected_resolution_time=None,
+):
 	_check_auth()
+
+	roles = set(frappe.get_roles(frappe.session.user))
+	if "Store Operator" in roles and not roles & {
+		"Food Court Supervisor",
+		"Food Court Manager",
+		"System Manager",
+	}:
+		# A Store Operator can only ever raise a deviation against their own
+		# outlet - override whatever the client sent rather than trusting it,
+		# same reasoning as _check_checklist_write_access() elsewhere here.
+		outlet = _get_my_outlet()
 
 	if not (outlet and category and issue and action_taken):
 		frappe.throw(_("Outlet, category, issue and action taken are all required."))
@@ -967,6 +1049,8 @@ def create_deviation(outlet, category, severity, issue, action_taken, photo=None
 	doc.issue = issue
 	doc.action_taken = action_taken
 	doc.photo = photo
+	doc.responsible_person = responsible_person
+	doc.expected_resolution_time = expected_resolution_time
 	if severity == "Critical":
 		# Frontend default was a placeholder "Area Manager" string; using
 		# the real Food Court Manager role instead so this also lines up
@@ -979,8 +1063,11 @@ def create_deviation(outlet, category, severity, issue, action_taken, photo=None
 
 
 @frappe.whitelist()
-def update_deviation_status(name, resolution_status):
+def update_deviation_status(
+	name, resolution_status, responsible_person=None, expected_resolution_time=None
+):
 	_check_auth()
+	_check_staff_role()
 
 	doc = frappe.get_doc("Checklist Deviation", name)
 	doc.resolution_status = resolution_status
@@ -990,8 +1077,42 @@ def update_deviation_status(name, resolution_status):
 	else:
 		doc.closed_by = None
 		doc.closed_on = None
+	# Assignment can be set/changed later while triaging, not just at
+	# creation - only touch these when the caller actually passed a value,
+	# so a plain status move doesn't wipe out an existing assignment.
+	if responsible_person is not None:
+		doc.responsible_person = responsible_person
+	if expected_resolution_time is not None:
+		doc.expected_resolution_time = expected_resolution_time
 	doc.save()
 	return _serialize_deviation(doc)
+
+
+@frappe.whitelist()
+def list_assignable_users():
+	"""Users eligible to be set as a Checklist Deviation's Responsible
+	Person - anyone holding one of the three staff roles, not every User
+	in the system. Powers a picker on the deviation triage screen instead
+	of free-text (which would let the same person end up spelled three
+	different ways across deviations).
+	"""
+	_check_auth()
+	user_names = frappe.get_all(
+		"Has Role",
+		filters={
+			"role": ["in", ["Store Operator", "Food Court Supervisor", "Food Court Manager"]],
+			"parenttype": "User",
+		},
+		pluck="parent",
+	)
+	if not user_names:
+		return []
+	return frappe.get_all(
+		"User",
+		filters={"name": ["in", set(user_names)], "enabled": 1},
+		fields=["name", "full_name"],
+		order_by="full_name",
+	)
 
 
 # ------------------------------- dashboard -----------------------------------
@@ -1010,7 +1131,8 @@ def _dashboard_compliance_trend():
 			date_format(date, '%%Y-%%m') as month_key,
 			avg(compliance_score) as compliance
 		from `tabShift Checklist`
-		where docstatus = 1 and date >= date_sub(curdate(), interval 6 month)
+		where docstatus = 1 and location is not null
+			and date >= date_sub(curdate(), interval 6 month)
 		group by location, date_format(date, '%%Y-%%m')
 		order by month_key
 		""",
@@ -1051,7 +1173,7 @@ def _dashboard_vendor_scorecard():
 		"""
 		select location as outlet, avg(compliance_score) as compliance
 		from `tabShift Checklist`
-		where docstatus = 1
+		where docstatus = 1 and location is not null
 		group by location
 		""",
 		as_dict=True,
@@ -1085,7 +1207,7 @@ def _dashboard_repeat_failures():
 			count(*) as fail_count
 		from `tabShift Checklist Item` sci
 		inner join `tabShift Checklist` sc on sc.name = sci.parent
-		where sci.status = 'Not OK' and sc.docstatus = 1
+		where sci.status = 'Not OK' and sc.docstatus = 1 and sc.location is not null
 		group by sci.check_description, sc.location
 		having count(*) > 3
 		order by fail_count desc
