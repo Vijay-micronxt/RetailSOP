@@ -86,7 +86,7 @@ CHECKLIST_STATUS_OPTIONS = ["Draft", "In Progress", "Missed", "Submitted", "Veri
 # truth for a shift-type filter dropdown, instead of a copy hardcoded on the
 # frontend that could drift from the Shift Checklist doctype's own Select
 # options.
-SHIFT_TYPE_OPTIONS = ["Pre-Opening", "Service Round", "Mid-Day", "Closing", "Weekly Audit"]
+SHIFT_TYPE_OPTIONS = ["Pre-Opening", "Mid-Day", "Closing", "Weekly Audit"]
 
 
 def _computed_status(doc):
@@ -500,15 +500,30 @@ DEVIATION_REPORT_COLUMNS = [
 
 
 @frappe.whitelist()
-def export_checklist_report(from_date=None, to_date=None, outlet=None, workflow_state=None):
+def export_checklist_report(
+	from_date=None, to_date=None, outlet=None, workflow_state=None, status=None, shift_type=None
+):
 	"""Full (unpaginated) checklist history matching the given filters, as
-	{"columns": [...], "rows": [...]} - same filters as get_history(). See
-	the section comment above for why the shape carries column metadata.
+	{"columns": [...], "rows": [...]}. See the section comment above for why
+	the shape carries column metadata.
+
+	Two different status filters, because the frontend has two different
+	notions of "status" that don't overlap:
+	  - workflow_state: the doctype's own field (Draft/Submitted/Verified) -
+	    what History's filter uses.
+	  - status: the same *computed* status get_today_checklists()/
+	    _computed_status() use (adds Missed/In Progress/Escalated, which
+	    aren't real workflow_state values) - what the Verification Queue's
+	    "Missed" mode needs to export the same rows it shows on screen.
+	docstatus is no longer hardcoded to 1 (submitted only) - that silently
+	excluded every Missed checklist (docstatus=0, never submitted) from
+	the export regardless of any filter, even though it's a real status
+	the UI shows and lets you filter to.
 	"""
 	_check_auth()
 	_check_staff_role()
 
-	conditions = [["docstatus", "=", 1]]
+	conditions = [["docstatus", "!=", 2]]
 	if from_date:
 		conditions.append(["date", ">=", from_date])
 	if to_date:
@@ -517,38 +532,29 @@ def export_checklist_report(from_date=None, to_date=None, outlet=None, workflow_
 		conditions.append(["workflow_state", "=", workflow_state])
 	if outlet and outlet != "All":
 		conditions.append(["location", "=", outlet])
+	if shift_type and shift_type != "All":
+		conditions.append(["shift_type", "=", shift_type])
 
-	rows = frappe.get_all(
-		"Shift Checklist",
-		filters=conditions,
-		fields=[
-			"name",
-			"date",
-			"shift_type",
-			"location",
-			"supervisor",
-			"workflow_state",
-			"compliance_score",
-			"total_checks",
-			"failed_checks",
-		],
-		order_by="date desc",
-	)
+	names = frappe.get_all("Shift Checklist", filters=conditions, pluck="name", order_by="date desc")
+	checklists = [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+	if status and status != "All":
+		checklists = [c for c in checklists if c["status"] == status]
+
 	return {
 		"columns": CHECKLIST_REPORT_COLUMNS,
 		"rows": [
 			{
-				"checklist_id": r.name,
-				"date": str(r.date),
-				"shift_type": r.shift_type,
-				"outlet": r.location,
-				"supervisor": r.supervisor,
-				"status": r.workflow_state,
-				"compliance_score": r.compliance_score,
-				"total_checks": r.total_checks,
-				"failed_checks": r.failed_checks,
+				"checklist_id": c["name"],
+				"date": c["date"],
+				"shift_type": c["shift_type"],
+				"outlet": c["location"],
+				"supervisor": c["supervisor"],
+				"status": c["status"],
+				"compliance_score": c["compliance_score"],
+				"total_checks": c["total_checks"],
+				"failed_checks": c["failed_checks"],
 			}
-			for r in rows
+			for c in checklists
 		],
 	}
 
@@ -745,7 +751,7 @@ def get_my_store_checklists(date=None, shift_type=None, limit=None, offset=None)
 
 
 @frappe.whitelist()
-def get_my_store_history(from_date=None, to_date=None, limit=50, offset=0):
+def get_my_store_history(from_date=None, to_date=None, workflow_state=None, limit=50, offset=0):
 	"""Submitted Shift Checklist history for the single Outlet the calling
 	user is the store_operator of - the Store Operator equivalent of
 	get_history(), scoped to their one store instead of every outlet.
@@ -762,12 +768,14 @@ def get_my_store_history(from_date=None, to_date=None, limit=50, offset=0):
 		conditions.append(["date", ">=", from_date])
 	if to_date:
 		conditions.append(["date", "<=", to_date])
+	if workflow_state and workflow_state != "All":
+		conditions.append(["workflow_state", "=", workflow_state])
 	names = _get_checklist_names(conditions, "date desc", limit, offset)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
 
 @frappe.whitelist()
-def get_my_store_history_chart(from_date=None, to_date=None):
+def get_my_store_history_chart(from_date=None, to_date=None, workflow_state=None):
 	"""Store Operator equivalent of get_history_chart(), scoped to their
 	one outlet - same relationship as get_my_store_history() has to
 	get_history(). Throws if the account isn't linked to a store.
@@ -783,6 +791,8 @@ def get_my_store_history_chart(from_date=None, to_date=None):
 		conditions.append(["date", ">=", from_date])
 	if to_date:
 		conditions.append(["date", "<=", to_date])
+	if workflow_state and workflow_state != "All":
+		conditions.append(["workflow_state", "=", workflow_state])
 
 	rows = frappe.get_all(
 		"Shift Checklist", filters=conditions, fields=["date", "compliance_score"]

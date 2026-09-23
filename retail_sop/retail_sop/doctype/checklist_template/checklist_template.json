@@ -31,7 +31,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Shift Type",
-   "options": "Pre-Opening\nService Round\nMid-Day\nClosing\nWeekly Audit",
+   "options": "Pre-Opening\nMid-Day\nClosing\nWeekly Audit",
    "reqd": 1
   },
   {
