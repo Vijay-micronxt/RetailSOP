@@ -284,14 +284,32 @@ def get_deviation_resolution_status_options():
 
 @frappe.whitelist()
 def get_history_status_options():
-	"""Values for get_history()'s workflow_state filter. Not all of
-	Shift Checklist.workflow_state's options (Draft/Submitted/Verified) -
-	History only ever returns docstatus=1 (submitted) records, so Draft
-	isn't a meaningful filter choice there; Submitted/Verified are the only
-	two that can actually occur.
+	"""Values for get_history()'s status filter - the same computed status
+	get_today_checklists()/_computed_status() use, not the raw
+	workflow_state field (Draft isn't included - History only ever returns
+	docstatus=1/submitted records, so Draft can't occur there; Escalated
+	isn't a real workflow_state value at all, it's Submitted + at least one
+	failed check, which is exactly why this needs its own filter rather
+	than reusing workflow_state - see _history_status_conditions()).
 	"""
 	_check_auth()
-	return ["Submitted", "Verified"]
+	return ["Submitted", "Escalated", "Verified"]
+
+
+def _history_status_conditions(status):
+	"""Expresses a get_today_checklists()-style computed status as SQL
+	conditions, for the two callers below - lets History filter by
+	Escalated (Submitted + failed_checks > 0) without having to fetch
+	every row and filter in Python, since these two are genuinely
+	paginated (unlike get_today_checklists, one outlet-day at a time).
+	"""
+	if status == "Verified":
+		return [["workflow_state", "=", "Verified"]]
+	if status == "Escalated":
+		return [["workflow_state", "=", "Submitted"], ["failed_checks", ">", 0]]
+	if status == "Submitted":
+		return [["workflow_state", "=", "Submitted"], ["failed_checks", "=", 0]]
+	return []
 
 
 @frappe.whitelist()
@@ -334,7 +352,14 @@ def get_checklist(name):
 
 @frappe.whitelist()
 def get_history(
-	from_date=None, to_date=None, workflow_state=None, outlet=None, shift_type=None, limit=50, offset=0
+	from_date=None,
+	to_date=None,
+	workflow_state=None,
+	status=None,
+	outlet=None,
+	shift_type=None,
+	limit=50,
+	offset=0,
 ):
 	_check_auth()
 	_check_staff_role()
@@ -343,7 +368,12 @@ def get_history(
 		conditions.append(["date", ">=", from_date])
 	if to_date:
 		conditions.append(["date", "<=", to_date])
-	if workflow_state and workflow_state != "All":
+	if status and status != "All":
+		conditions += _history_status_conditions(status)
+	elif workflow_state and workflow_state != "All":
+		# Older, narrower filter (Submitted/Verified only) - kept for
+		# existing callers; `status` above is the newer, complete version
+		# that can also express Escalated.
 		conditions.append(["workflow_state", "=", workflow_state])
 	if outlet and outlet != "All":
 		conditions.append(["location", "=", outlet])
@@ -369,7 +399,7 @@ def _compliance_by_date(rows):
 
 
 @frappe.whitelist()
-def get_history_chart(from_date=None, to_date=None, workflow_state=None, outlet=None):
+def get_history_chart(from_date=None, to_date=None, workflow_state=None, status=None, outlet=None):
 	"""Compliance-trend aggregate backing the chart on the History screen -
 	same filters as get_history() above, but summarized (average
 	compliance_score per date) instead of paginated full records. The
@@ -386,7 +416,9 @@ def get_history_chart(from_date=None, to_date=None, workflow_state=None, outlet=
 		conditions.append(["date", ">=", from_date])
 	if to_date:
 		conditions.append(["date", "<=", to_date])
-	if workflow_state and workflow_state != "All":
+	if status and status != "All":
+		conditions += _history_status_conditions(status)
+	elif workflow_state and workflow_state != "All":
 		conditions.append(["workflow_state", "=", workflow_state])
 	if outlet and outlet != "All":
 		conditions.append(["location", "=", outlet])
@@ -591,6 +623,73 @@ def export_deviation_report(
 	}
 
 
+@frappe.whitelist()
+def export_my_store_checklist_report(from_date=None, to_date=None, status=None, shift_type=None):
+	"""Store Operator equivalent of export_checklist_report() - no
+	_check_staff_role() (Store Operator deliberately doesn't have it),
+	self-scoped to the caller's own outlet instead, same as every other
+	get_my_store_*/export_my_store_* pair in this module.
+	"""
+	_check_auth()
+	outlet = _get_my_outlet()
+
+	conditions = [["location", "=", outlet], ["docstatus", "!=", 2]]
+	if from_date:
+		conditions.append(["date", ">=", from_date])
+	if to_date:
+		conditions.append(["date", "<=", to_date])
+	if status and status != "All":
+		conditions += _history_status_conditions(status)
+	if shift_type and shift_type != "All":
+		conditions.append(["shift_type", "=", shift_type])
+
+	names = frappe.get_all("Shift Checklist", filters=conditions, pluck="name", order_by="date desc")
+	checklists = [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
+
+	return {
+		"columns": CHECKLIST_REPORT_COLUMNS,
+		"rows": [
+			{
+				"checklist_id": c["name"],
+				"date": c["date"],
+				"shift_type": c["shift_type"],
+				"outlet": c["location"],
+				"supervisor": c["supervisor"],
+				"status": c["status"],
+				"compliance_score": c["compliance_score"],
+				"total_checks": c["total_checks"],
+				"failed_checks": c["failed_checks"],
+			}
+			for c in checklists
+		],
+	}
+
+
+@frappe.whitelist()
+def export_my_store_deviation_report(from_date=None, to_date=None, resolution_status=None):
+	"""Store Operator equivalent of export_deviation_report() - self-scoped
+	to the caller's own outlet, same pattern as export_my_store_checklist_report().
+	"""
+	_check_auth()
+	outlet = _get_my_outlet()
+
+	filters = {"outlet": outlet}
+	if resolution_status and resolution_status != "All":
+		filters["resolution_status"] = resolution_status
+	if from_date:
+		filters["date"] = [">=", from_date]
+	if to_date:
+		filters["date"] = ["between", [from_date, to_date]] if from_date else ["<=", to_date]
+
+	names = frappe.get_all(
+		"Checklist Deviation", filters=filters, pluck="name", order_by="date desc, creation desc"
+	)
+	return {
+		"columns": DEVIATION_REPORT_COLUMNS,
+		"rows": [_serialize_deviation(frappe.get_doc("Checklist Deviation", n)) for n in names],
+	}
+
+
 # ------------------------------ store operator -------------------------------
 # Read-only, self-scoped to the caller's own outlet - deliberately separate
 # from the supervisor/manager surface above. The Store Operator role holds
@@ -751,7 +850,9 @@ def get_my_store_checklists(date=None, shift_type=None, limit=None, offset=None)
 
 
 @frappe.whitelist()
-def get_my_store_history(from_date=None, to_date=None, workflow_state=None, limit=50, offset=0):
+def get_my_store_history(
+	from_date=None, to_date=None, workflow_state=None, status=None, limit=50, offset=0
+):
 	"""Submitted Shift Checklist history for the single Outlet the calling
 	user is the store_operator of - the Store Operator equivalent of
 	get_history(), scoped to their one store instead of every outlet.
@@ -768,14 +869,16 @@ def get_my_store_history(from_date=None, to_date=None, workflow_state=None, limi
 		conditions.append(["date", ">=", from_date])
 	if to_date:
 		conditions.append(["date", "<=", to_date])
-	if workflow_state and workflow_state != "All":
+	if status and status != "All":
+		conditions += _history_status_conditions(status)
+	elif workflow_state and workflow_state != "All":
 		conditions.append(["workflow_state", "=", workflow_state])
 	names = _get_checklist_names(conditions, "date desc", limit, offset)
 	return [_serialize_checklist(frappe.get_doc("Shift Checklist", n)) for n in names]
 
 
 @frappe.whitelist()
-def get_my_store_history_chart(from_date=None, to_date=None, workflow_state=None):
+def get_my_store_history_chart(from_date=None, to_date=None, workflow_state=None, status=None):
 	"""Store Operator equivalent of get_history_chart(), scoped to their
 	one outlet - same relationship as get_my_store_history() has to
 	get_history(). Throws if the account isn't linked to a store.
@@ -791,7 +894,9 @@ def get_my_store_history_chart(from_date=None, to_date=None, workflow_state=None
 		conditions.append(["date", ">=", from_date])
 	if to_date:
 		conditions.append(["date", "<=", to_date])
-	if workflow_state and workflow_state != "All":
+	if status and status != "All":
+		conditions += _history_status_conditions(status)
+	elif workflow_state and workflow_state != "All":
 		conditions.append(["workflow_state", "=", workflow_state])
 
 	rows = frappe.get_all(
