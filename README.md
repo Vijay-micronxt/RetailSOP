@@ -1009,6 +1009,21 @@ existing site keeps behaving exactly as it already does), `"office"`,
   subtitles, the deviation form's location field, etc.) It defaults to
   the store wording while loading or if the fetch fails, matching the
   backend's own fallback.
+- **`api._get_my_outlet()`'s own error message.** The Store Operator
+  self-service endpoints (`get_my_outlet`/`get_my_store_summary`/
+  `get_my_store_checklists`/`get_my_store_history`/
+  `get_my_store_history_chart`/`export_my_store_*`) all throw through
+  this one shared helper when the calling user isn't anyone's
+  `Outlet.store_operator` - it now reads `"Your account has no {outlet}
+  assigned."` with `{outlet}` from `domain.get_labels()` (lowercased),
+  instead of a hardcoded "a store." This was missed in the original
+  domain pass above, which only covered frontend display text and the
+  Desk workspace - backend-thrown error strings are a separate surface,
+  and this was the one place that still said "store" regardless of
+  domain. The three call sites that used to duplicate this check inline
+  (`get_my_store_summary`/`get_my_store_history`/
+  `get_my_store_history_chart`) now call `_get_my_outlet()` instead, so
+  there's only one message to keep domain-aware going forward.
 - **Which seed patch installs its demo checklist content.**
   `seed_my_break_sop.py` (store), `seed_office_sop.py` (office) and
   `seed_facility_sop.py` (facility) each check `domain.get_domain()`

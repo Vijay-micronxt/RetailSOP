@@ -715,7 +715,12 @@ def export_my_store_deviation_report(from_date=None, to_date=None, resolution_st
 def _get_my_outlet():
 	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
 	if not outlet:
-		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+		from retail_sop.domain import get_labels
+
+		frappe.throw(
+			_("Your account has no {0} assigned.").format(get_labels()["outlet"].lower()),
+			frappe.PermissionError,
+		)
 	return outlet
 
 
@@ -781,9 +786,7 @@ def get_my_store_summary():
 	"""
 	_check_auth()
 
-	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
-	if not outlet:
-		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+	outlet = _get_my_outlet()
 
 	# Last 30 submitted checklists for this outlet - the "rating" is their
 	# average compliance_score. Window/definition not specified beyond
@@ -872,9 +875,7 @@ def get_my_store_history(
 	"""
 	_check_auth()
 
-	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
-	if not outlet:
-		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+	outlet = _get_my_outlet()
 
 	conditions = [["location", "=", outlet], ["docstatus", "=", 1]]
 	if from_date:
@@ -897,9 +898,7 @@ def get_my_store_history_chart(from_date=None, to_date=None, workflow_state=None
 	"""
 	_check_auth()
 
-	outlet = frappe.db.get_value("Outlet", {"store_operator": frappe.session.user}, "outlet_name")
-	if not outlet:
-		frappe.throw(_("Your account is not linked to a store."), frappe.PermissionError)
+	outlet = _get_my_outlet()
 
 	conditions = [["location", "=", outlet], ["docstatus", "=", 1]]
 	if from_date:
