@@ -213,7 +213,16 @@ def get_my_leave_applications():
 	return frappe.get_all(
 		"Leave Application",
 		filters={"employee": employee, "docstatus": ["!=", 2]},
-		fields=["name", "leave_type", "from_date", "to_date", "total_leave_days", "status", "description"],
+		fields=[
+			"name",
+			"leave_type",
+			"from_date",
+			"to_date",
+			"total_leave_days",
+			"status",
+			"description",
+			"rejection_reason",
+		],
 		order_by="from_date desc",
 		ignore_permissions=True,
 	)
@@ -415,7 +424,7 @@ def apply_leave(leave_type, from_date, to_date, reason=None):
 
 
 @frappe.whitelist()
-def action_leave_application(name, approve):
+def action_leave_application(name, approve, reason=None):
 	_check_auth()
 	roles = set(frappe.get_roles(frappe.session.user))
 	if not roles & {"Food Court Supervisor", "Food Court Manager", "System Manager"}:
@@ -426,7 +435,11 @@ def action_leave_application(name, approve):
 		frappe.throw(_("This leave application has already been actioned."))
 	_check_not_self(application.employee)
 
+	if not cint(approve) and not reason:
+		frappe.throw(_("A rejection reason is required."))
+
 	application.status = "Approved" if cint(approve) else "Rejected"
+	application.rejection_reason = reason if not cint(approve) else None
 	application.save(ignore_permissions=True)
 
 	return {"name": application.name, "status": application.status}
@@ -442,7 +455,17 @@ def get_my_timesheets():
 	return frappe.get_all(
 		"Shift Timesheet",
 		filters={"employee": employee},
-		fields=["name", "date", "outlet", "check_in", "check_out", "hours_worked", "status", "remarks"],
+		fields=[
+			"name",
+			"date",
+			"outlet",
+			"check_in",
+			"check_out",
+			"hours_worked",
+			"status",
+			"rejection_reason",
+			"remarks",
+		],
 		order_by="date desc",
 		ignore_permissions=True,
 	)
@@ -498,6 +521,9 @@ def resubmit_timesheet(name, date, check_in, check_out, remarks=None):
 	timesheet.check_out = check_out
 	timesheet.remarks = remarks
 	timesheet.status = "Open"
+	# A fresh review cycle starts here - the reason the *previous* review
+	# ended in rejection no longer applies to what's being judged now.
+	timesheet.rejection_reason = None
 	# Tells ShiftTimesheet.validate() this is a deliberate, corrected
 	# date/time claim - not just action_timesheet()'s Open<->Approved/
 	# Rejected status flip - so the date-bounds/Attendance checks judge
@@ -543,7 +569,7 @@ def get_pending_timesheet_approvals():
 
 
 @frappe.whitelist()
-def action_timesheet(name, approve):
+def action_timesheet(name, approve, reason=None):
 	_check_auth()
 	roles = set(frappe.get_roles(frappe.session.user))
 	if not roles & {"Food Court Supervisor", "Food Court Manager", "System Manager"}:
@@ -554,7 +580,11 @@ def action_timesheet(name, approve):
 		frappe.throw(_("This timesheet has already been actioned."))
 	_check_not_self(timesheet.employee)
 
+	if not cint(approve) and not reason:
+		frappe.throw(_("A rejection reason is required."))
+
 	timesheet.status = "Approved" if cint(approve) else "Rejected"
+	timesheet.rejection_reason = reason if not cint(approve) else None
 	timesheet.save(ignore_permissions=True)
 
 	return {"name": timesheet.name, "status": timesheet.status}

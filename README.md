@@ -846,12 +846,12 @@ Timesheet` doctype (§13.1). Two audiences:
 | `apply_leave(leave_type, from_date, to_date, reason=None)` | Inserts + submits a `Leave Application` for the caller's own Employee. HRMS's own `validate()` enforces balance/holiday/overlap rules — never re-implemented here, it just throws if invalid |
 | `get_my_leave_applications()` | The caller's own leave history (any non-cancelled application) |
 | `get_pending_leave_approvals()` | Every `status="Open"` leave application, for **any** Food Court Supervisor or Manager to action — see below for why this is flat |
-| `action_leave_application(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only. Throws if the actor's own Employee record is the application's `employee` — see "Self-approval" below |
+| `action_leave_application(name, approve, reason=None)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only. `reason` is **required when rejecting** (stored in the `rejection_reason` custom field, cleared if ever approved) — throws "A rejection reason is required." without it. Throws if the actor's own Employee record is the application's `employee` — see "Self-approval" below |
 | `get_my_timesheets()` | The caller's own `Shift Timesheet` history |
 | `submit_timesheet(date, check_in, check_out, remarks=None)` | Inserts a `Shift Timesheet` (`status="Open"`) for the caller's own Employee. `hours_worked` and `outlet` are both computed/fetched server-side (`ShiftTimesheet.validate`/`fetch_from`), never trusted from the client. Same `validate()` call also enforces the overlap/length/lock/date-bound/Attendance rules in §13.1 — this isn't a separate check here |
 | `get_pending_timesheet_approvals()` | Every `status="Open"` timesheet, for any Food Court Supervisor or Manager to action — same flat model as leave |
-| `action_timesheet(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only. Throws if the actor's own Employee record is the timesheet's `employee` — see "Self-approval" below |
-| `resubmit_timesheet(name, date, check_in, check_out, remarks=None)` | Corrects and resubmits (`status` back to `Open`) a `Rejected` timesheet in place, rather than only being able to file a whole new entry. Caller's own Employee only, and only while `status="Rejected"` — `ShiftTimesheet.validate()` enforces the latter again regardless (§13.1) |
+| `action_timesheet(name, approve, reason=None)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only. Same `reason`-required-on-reject rule as `action_leave_application`, stored in `Shift Timesheet.rejection_reason`. Throws if the actor's own Employee record is the timesheet's `employee` — see "Self-approval" below |
+| `resubmit_timesheet(name, date, check_in, check_out, remarks=None)` | Corrects and resubmits (`status` back to `Open`) a `Rejected` timesheet in place, rather than only being able to file a whole new entry — also clears `rejection_reason`, since a fresh review cycle starts here. Caller's own Employee only, and only while `status="Rejected"` — `ShiftTimesheet.validate()` enforces the latter again regardless (§13.1) |
 | `get_employee_attendance_history(employee, from_date=None, to_date=None, page=1, page_size=20)` | Paginated `Attendance` history for **any one employee** (not just the caller's own), optionally bounded to `[from_date, to_date]` on `attendance_date`. Returns `{records, total, page, page_size}`; `page_size` capped at 100. Supervisor/Manager only |
 | `get_employee_leave_history(employee, from_date=None, to_date=None, page=1, page_size=20)` | Same shape as above, over `Leave Application`, bounded on `from_date`. Supervisor/Manager only |
 
@@ -897,7 +897,10 @@ is — null for office/HQ employees with no outlet set), `date`, `check_in`/
 `check_out` (Time), `hours_worked` (Float, read-only — computed in
 `validate()` via `frappe.utils.time_diff_in_hours`, never accepted from
 the client), `status` (Select: `Open`/`Approved`/`Rejected`, default
-`Open`, read-only from outside `hr_api.py`), `remarks` (Small Text).
+`Open`, read-only from outside `hr_api.py`), `rejection_reason` (Small
+Text, read-only, only ever non-null while `status="Rejected"` — set by
+`action_timesheet` when rejecting, cleared on approval or
+resubmission), `remarks` (Small Text).
 Native permissions are System Manager only, same as `Auth Session`/
 `Password Reset Request` — every other read/write goes through
 `hr_api.py`'s own role checks above.
@@ -950,14 +953,21 @@ time check, §5):
   `is_resubmission` scoping as the date check, for the same reason.
 
 A `Rejected` entry's history survives a resubmission — `track_changes:
-1` on this doctype means the original rejected values are still in its
-version history, not overwritten without a trace.
+1` on this doctype means the original rejected values (and the reason
+it was rejected for) are still in its version history, not overwritten
+without a trace.
 
-Still deliberately **not addressed**: nothing currently surfaces *why*
-a timesheet (or leave application) was rejected — `action_timesheet`/
-`action_leave_application` take no rejection reason, so an employee
-resubmitting is going on the approver's own out-of-band communication,
-not anything stored on the record itself.
+**Rejection reasons**: `action_timesheet`/`action_leave_application`
+both require a `reason` when rejecting (`Leave Application` gets this
+via a new `rejection_reason` Custom Field — `fixtures/custom_field.json`
+/ `hooks.py`'s fixture list, `allow_on_submit=1` since `status` is set
+the same way on an already-submitted application; `Shift Timesheet`'s
+own field needed no such flag, it isn't submittable). The employee sees
+it on their own "Your requests"/"Your timesheets" list while the entry
+stays `Rejected`; it's cleared the moment the entry is approved, or (for
+timesheets) resubmitted - `Leave Application` has no resubmit flow of
+its own, so a rejected application can only be refiled as a new one,
+same as before this change.
 
 **Not verified against a live bench** (same caveat as the Workflow/
 Notification fixtures in §10): `Attendance`'s mandatory fields,

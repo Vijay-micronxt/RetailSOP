@@ -20,8 +20,9 @@ doctype_js = {
 # Fixtures
 # --------
 # Ships the app's roles, the Draft -> Submitted -> Verified workflow
-# config for Shift Checklist, and the Employee.outlet custom field (§13)
-# declaratively, so they exist right after `bench install-app` /
+# config for Shift Checklist, and the Employee.outlet/Leave
+# Application.rejection_reason custom fields (§13) declaratively, so
+# they exist right after `bench install-app` /
 # `bench migrate` without a manual setup step. Shift Timesheet is a real
 # doctype (its own JSON under retail_sop/doctype/), not a fixture - it
 # ships with the app's own migrations like Shift Checklist does.
@@ -50,7 +51,9 @@ fixtures = [
 	},
 	{
 		"dt": "Custom Field",
-		"filters": [["name", "=", "Employee-outlet"]],
+		"filters": [
+			["name", "in", ["Employee-outlet", "Leave Application-rejection_reason"]]
+		],
 	},
 ]
 

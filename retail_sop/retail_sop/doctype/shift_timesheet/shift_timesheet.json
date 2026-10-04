@@ -15,6 +15,7 @@
   "check_out",
   "hours_worked",
   "status",
+  "rejection_reason",
   "remarks"
  ],
  "fields": [
@@ -86,6 +87,14 @@
    "options": "Open\nApproved\nRejected",
    "read_only": 1,
    "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.status==\"Rejected\"",
+   "description": "Set by hr_api.action_timesheet when rejecting - cleared on resubmission (hr_api.resubmit_timesheet) since that starts a fresh review cycle.",
+   "fieldname": "rejection_reason",
+   "fieldtype": "Small Text",
+   "label": "Rejection Reason",
+   "read_only": 1
   },
   {
    "fieldname": "remarks",
