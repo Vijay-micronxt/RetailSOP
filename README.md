@@ -846,11 +846,11 @@ Timesheet` doctype (§13.1). Two audiences:
 | `apply_leave(leave_type, from_date, to_date, reason=None)` | Inserts + submits a `Leave Application` for the caller's own Employee. HRMS's own `validate()` enforces balance/holiday/overlap rules — never re-implemented here, it just throws if invalid |
 | `get_my_leave_applications()` | The caller's own leave history (any non-cancelled application) |
 | `get_pending_leave_approvals()` | Every `status="Open"` leave application, for **any** Food Court Supervisor or Manager to action — see below for why this is flat |
-| `action_leave_application(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only |
+| `action_leave_application(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only. Throws if the actor's own Employee record is the application's `employee` — see "Self-approval" below |
 | `get_my_timesheets()` | The caller's own `Shift Timesheet` history |
-| `submit_timesheet(date, check_in, check_out, remarks=None)` | Inserts a `Shift Timesheet` (`status="Open"`) for the caller's own Employee. `hours_worked` is computed server-side (`ShiftTimesheet.validate`), never trusted from the client |
+| `submit_timesheet(date, check_in, check_out, remarks=None)` | Inserts a `Shift Timesheet` (`status="Open"`) for the caller's own Employee. `hours_worked` is computed server-side (`ShiftTimesheet.validate`), never trusted from the client. Same `validate()` call also enforces the overlap/length/lock rules in §13.1 — this isn't a separate check here |
 | `get_pending_timesheet_approvals()` | Every `status="Open"` timesheet, for any Food Court Supervisor or Manager to action — same flat model as leave |
-| `action_timesheet(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only |
+| `action_timesheet(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only. Throws if the actor's own Employee record is the timesheet's `employee` — see "Self-approval" below |
 | `get_employee_attendance_history(employee, from_date=None, to_date=None, page=1, page_size=20)` | Paginated `Attendance` history for **any one employee** (not just the caller's own), optionally bounded to `[from_date, to_date]` on `attendance_date`. Returns `{records, total, page, page_size}`; `page_size` capped at 100. Supervisor/Manager only |
 | `get_employee_leave_history(employee, from_date=None, to_date=None, page=1, page_size=20)` | Same shape as above, over `Leave Application`, bounded on `from_date`. Supervisor/Manager only |
 
@@ -875,6 +875,14 @@ falling back to any user holding Food Court Manager), purely because
 HRMS's form expects that field filled in — not because it restricts who
 may actually approve.
 
+**Self-approval is blocked** (`hr_api._check_not_self`): flat approval
+means any Supervisor/Manager can action any entry, but that must never
+extend to someone who also has their own Employee record approving
+their *own* submission. Both `action_timesheet`/`action_leave_application`
+look up the acting user's own Employee (same lookup as
+`_get_my_employee`, but tolerant of there being none) and throw
+`frappe.PermissionError` if it matches the entry's `employee`.
+
 ### 13.1 Shift Timesheet doctype
 
 `retail_sop.retail_sop.doctype.shift_timesheet` — a plain, app-owned
@@ -890,6 +898,42 @@ the client), `status` (Select: `Open`/`Approved`/`Rejected`, default
 Native permissions are System Manager only, same as `Auth Session`/
 `Password Reset Request` — every other read/write goes through
 `hr_api.py`'s own role checks above.
+
+**`validate()` enforces, as the single source of truth regardless of
+entry point** (same philosophy as `ShiftChecklist.validate()`'s cutoff-
+time check, §5):
+- **`check_out` must be after `check_in`** — a same-day entry with
+  `check_out <= check_in` (e.g. AM/PM mixed up) is rejected outright
+  rather than silently stored as negative `hours_worked`. A shift that
+  genuinely crosses midnight isn't representable in one row (`date` +
+  two `Time` fields, no end-date) — log it as two entries instead, one
+  ending 23:59, one starting 00:00.
+- **A single shift can't exceed `MAX_SHIFT_HOURS` (16, a flagged
+  assumption, not a confirmed labor-law figure)** — generous enough for
+  a real double shift, tight enough to catch a fat-fingered time entry
+  that would otherwise log ~24 hours unchallenged.
+- **No two entries for the same employee + date may have overlapping
+  `check_in`-`check_out` ranges.** This is the fix for the originally
+  reported gap (an employee could submit any number of duplicate/
+  overlapping entries for one day with zero pushback). A second
+  *non-overlapping* entry for the same day is still allowed (a genuine
+  split shift), and a `Rejected` entry is excluded from the overlap
+  check so a corrected resubmission after a rejection isn't blocked by
+  the mistake it's fixing.
+- **An entry can no longer be edited once its `status` leaves `Open`**
+  (checked against the DB's current value, not an in-memory cache, so
+  it doesn't depend on exactly when Frappe populates
+  `get_doc_before_save()`). The `Open` → `Approved`/`Rejected`
+  transition `action_timesheet()` itself performs is unaffected — the
+  DB still reads `Open` at the moment that save runs.
+
+Deliberately **not yet addressed** (flagged during the same audit, kept
+out of this pass to stay focused): no bound on how far in the future/
+past `date` can be; no cross-check against that employee's `Attendance`/
+`Leave Application` for the same date (so a full-day timesheet and an
+"Absent" attendance record can coexist unflagged); no `outlet` captured
+on the entry; no resubmission/edit path for a `Rejected` entry short of
+filing a brand-new one.
 
 **Not verified against a live bench** (same caveat as the Workflow/
 Notification fixtures in §10): `Attendance`'s mandatory fields,

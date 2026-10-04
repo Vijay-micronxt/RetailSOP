@@ -63,6 +63,20 @@ def _get_my_employee():
 	return employee
 
 
+def _check_not_self(employee):
+	"""Approval here is flat - any Food Court Supervisor/Manager can
+	action any Open entry (see module docstring) - but that must never
+	extend to someone approving their own submission just because they
+	also hold an approval role. Looked up the same way as
+	_get_my_employee(), but without throwing when the acting user has no
+	Employee record at all (most Supervisors/Managers won't) - absence
+	of a link just means this can't be a self-approval.
+	"""
+	acting_employee = frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "name")
+	if acting_employee and acting_employee == employee:
+		frappe.throw(_("You cannot approve or reject your own submission."), frappe.PermissionError)
+
+
 def _fallback_leave_approver():
 	"""Employee.leave_approver, when set, is a specific person's whole
 	job here - but it's still just a form field HRMS expects filled in
@@ -410,6 +424,7 @@ def action_leave_application(name, approve):
 	application = frappe.get_doc("Leave Application", name)
 	if application.status != "Open":
 		frappe.throw(_("This leave application has already been actioned."))
+	_check_not_self(application.employee)
 
 	application.status = "Approved" if cint(approve) else "Rejected"
 	application.save(ignore_permissions=True)
@@ -494,6 +509,7 @@ def action_timesheet(name, approve):
 	timesheet = frappe.get_doc("Shift Timesheet", name)
 	if timesheet.status != "Open":
 		frappe.throw(_("This timesheet has already been actioned."))
+	_check_not_self(timesheet.employee)
 
 	timesheet.status = "Approved" if cint(approve) else "Rejected"
 	timesheet.save(ignore_permissions=True)
