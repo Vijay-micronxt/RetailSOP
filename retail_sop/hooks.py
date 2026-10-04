@@ -77,3 +77,15 @@ scheduler_events = {
 before_request = [
 	"retail_sop.auth.middleware.authenticate_request",
 ]
+
+# Domain-aware Desk relabeling
+# ----------------------------
+# Re-labels the "Retail SOP" workspace's Outlet shortcut/link to match
+# the configured retail_sop_domain (see retail_sop/domain.py, README
+# §14) every time `bench migrate` runs - not just on install, so it
+# keeps up if the domain is changed later, and isn't lost when module
+# sync re-syncs the workspace from its checked-in ("store" wording)
+# fixture.
+after_migrate = [
+	"retail_sop.domain.relabel_workspace",
+]

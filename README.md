@@ -937,6 +937,16 @@ existing site keeps behaving exactly as it already does), `"office"`,
   and no-op unless it matches their own domain - so a fresh site only
   ever gets one domain's worth of seeded templates, selected purely by
   this config key at the time `bench migrate` runs.
+- **The "Retail SOP" Desk workspace's Outlet shortcut/link and header
+  text.** `domain.relabel_workspace()` runs on every `bench migrate`
+  (`hooks.py`'s `after_migrate`) and relabels the workspace's Outlet
+  shortcut/link (to "Office"/"Facility") and its header/tagline text
+  (to "Office SOP"/"Facility SOP" etc.) to match the current domain -
+  it has to re-run every migrate rather than once, both so changing
+  `retail_sop_domain` later re-relabels it, and because module sync
+  re-syncs this workspace from its own checked-in ("store" wording)
+  fixture on every migrate, which would otherwise silently undo a
+  one-time relabel.
 
 **What it deliberately does *not* change** - nothing structural, by
 design, to keep this low-risk:
@@ -946,9 +956,15 @@ design, to keep this low-risk:
   domain. Permission checks, escalation targets (`escalate_to`), and
   everything in §4/§5/§8 are domain-unaware - they key off these real
   names regardless of what the frontend displays.
-- Desk itself (doctype list labels, role names in Users and Permissions)
-  isn't relabelled - only the pixel-perfect frontend consumes
-  `get_domain_info()`. Desk admins always see the real technical names.
+- The `Outlet` doctype's own breadcrumb/list-view title, and every
+  Role's name in Users and Permissions (and the Role dropdown
+  anywhere else in Desk), still show the real technical names
+  ("Outlet", "Store Operator", ...). Frappe ties a Role's/DocType's
+  display identity directly to its actual record name - there's no
+  separate "label" to override the way there is for a field, short of
+  actually renaming the record (which `relabel_workspace()`
+  deliberately avoids - see its own docstring). Only the pixel-perfect
+  frontend and the one workspace above get full relabeling.
 - Changing `retail_sop_domain` after a site already has templates seeded
   doesn't retroactively remove or relabel them - each seed patch only
   ever creates, never deletes (same idempotent pattern as the original
