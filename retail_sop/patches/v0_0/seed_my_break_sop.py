@@ -943,6 +943,14 @@ def _create_template(template_name, location, spec):
 
 
 def execute():
+	from retail_sop.domain import get_domain
+
+	# This is the "store" (food court) domain's own content - sites
+	# configured for a different retail_sop_domain (see domain.py) get
+	# their seed content from the matching seed_*_sop.py patch instead.
+	if get_domain() != "store":
+		return
+
 	frappe.reload_doc("retail_sop", "doctype", "checklist_category")
 	frappe.reload_doc("retail_sop", "doctype", "checklist_template_item")
 	frappe.reload_doc("retail_sop", "doctype", "checklist_template")

@@ -900,6 +900,70 @@ installed version. Double-check after the first `bench migrate`.
 
 ---
 
+## 14. Business domain (store / office / facility)
+
+This app started as a food-court/retail SOP tool, but nothing about the
+underlying model is actually retail-specific - an `Outlet` is just "one
+location", a `Checklist Template` with `checklist_scope = "Food Court"`
+is just "the whole organization" instead of one location. `retail_sop/
+domain.py` makes that explicit via a site_config switch, so the same app
+installs cleanly for offices and generic facility-management use cases
+too, without anyone having to read "Food Court Supervisor" on an office
+dashboard.
+
+Set in `site_config.json`:
+
+```json
+"retail_sop_domain": "office"
+```
+
+Recognised values: `"store"` (the original implementation - also the
+**default/fallback** if the key is unset or misspelled, so every
+existing site keeps behaving exactly as it already does), `"office"`,
+`"facility"`.
+
+**What it changes:**
+- **Display labels only.** `get_domain_info()` (whitelisted, `allow_guest`)
+  returns `{domain, labels}` - the frontend's `useBusinessLabels()` hook
+  (`pixel-perfect/src/lib/businessDomain.ts`) fetches it once and uses it
+  everywhere the UI used to hardcode "Outlet"/"Store Operator"/"Food
+  Court Supervisor"/"Food Court" (nav badges, panel titles, screen
+  subtitles, the deviation form's location field, etc.) It defaults to
+  the store wording while loading or if the fetch fails, matching the
+  backend's own fallback.
+- **Which seed patch installs its demo checklist content.**
+  `seed_my_break_sop.py` (store), `seed_office_sop.py` (office) and
+  `seed_facility_sop.py` (facility) each check `domain.get_domain()`
+  and no-op unless it matches their own domain - so a fresh site only
+  ever gets one domain's worth of seeded templates, selected purely by
+  this config key at the time `bench migrate` runs.
+
+**What it deliberately does *not* change** - nothing structural, by
+design, to keep this low-risk:
+- The `Outlet` doctype, the `Store Operator`/`Food Court Supervisor`/
+  `Food Court Manager` roles, and the `Checklist Scope` field's
+  `Outlet`/`Food Court` option values are the same strings on every
+  domain. Permission checks, escalation targets (`escalate_to`), and
+  everything in §4/§5/§8 are domain-unaware - they key off these real
+  names regardless of what the frontend displays.
+- Desk itself (doctype list labels, role names in Users and Permissions)
+  isn't relabelled - only the pixel-perfect frontend consumes
+  `get_domain_info()`. Desk admins always see the real technical names.
+- Changing `retail_sop_domain` after a site already has templates seeded
+  doesn't retroactively remove or relabel them - each seed patch only
+  ever creates, never deletes (same idempotent pattern as the original
+  store content). Pick the domain before the first `bench migrate`, or
+  clean up the other domain's templates by hand if switching later.
+
+For a business that doesn't fit any of these three wordings, or wants
+different checklist content than the seeded placeholders, use the
+**Data Import** path already described in §3 rather than requesting a
+fourth domain - the label layer is cosmetic, but the actual checklist
+content for any organization is expected to be authored or imported,
+not hardcoded here.
+
+---
+
 ## License
 
 MIT

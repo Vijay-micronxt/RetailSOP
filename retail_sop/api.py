@@ -235,6 +235,18 @@ def list_outlets(limit=None, offset=None):
 	)
 
 
+@frappe.whitelist(allow_guest=True)
+def get_domain_info():
+	"""Which business vertical (store/office/facility) this site is
+	configured for, and the display labels that go with it - see
+	retail_sop/domain.py. allow_guest so the frontend can pick up the
+	right wording on the login screen too, before a session exists.
+	"""
+	from retail_sop.domain import get_domain, get_labels
+
+	return {"domain": get_domain(), "labels": get_labels()}
+
+
 @frappe.whitelist()
 def list_categories(limit=None, offset=None):
 	_check_auth()
