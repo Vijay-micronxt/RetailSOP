@@ -472,6 +472,48 @@ def submit_timesheet(date, check_in, check_out, remarks=None):
 
 
 @frappe.whitelist()
+def resubmit_timesheet(name, date, check_in, check_out, remarks=None):
+	"""Lets the employee who filed a Rejected Shift Timesheet correct it
+	and put it back in front of an approver, instead of their only
+	option being to file a whole separate new entry (which would leave
+	the rejected row sitting in their history as a dangling duplicate).
+	Only the entry's own employee may do this, and only while it's
+	actually Rejected - ShiftTimesheet.validate() enforces the second
+	part again regardless (_lock_if_already_actioned), this check just
+	gives a clearer error than that generic one would.
+	"""
+	_check_auth()
+	if not (date and check_in and check_out):
+		frappe.throw(_("date, check_in and check_out are all required."))
+
+	employee = _get_my_employee()
+	timesheet = frappe.get_doc("Shift Timesheet", name)
+	if timesheet.employee != employee:
+		frappe.throw(_("This isn't your timesheet."), frappe.PermissionError)
+	if timesheet.status != "Rejected":
+		frappe.throw(_("Only a Rejected timesheet can be resubmitted."))
+
+	timesheet.date = date
+	timesheet.check_in = check_in
+	timesheet.check_out = check_out
+	timesheet.remarks = remarks
+	timesheet.status = "Open"
+	# Tells ShiftTimesheet.validate() this is a deliberate, corrected
+	# date/time claim - not just action_timesheet()'s Open<->Approved/
+	# Rejected status flip - so the date-bounds/Attendance checks judge
+	# it the same way they would a brand-new submission (see
+	# ShiftTimesheet._is_new_claim).
+	timesheet.flags.is_resubmission = True
+	timesheet.save(ignore_permissions=True)
+
+	return {
+		"name": timesheet.name,
+		"status": timesheet.status,
+		"hours_worked": timesheet.hours_worked,
+	}
+
+
+@frappe.whitelist()
 def get_pending_timesheet_approvals():
 	"""Every Open Shift Timesheet, for any Food Court Supervisor or
 	Manager to action - flat, same as get_pending_leave_approvals.

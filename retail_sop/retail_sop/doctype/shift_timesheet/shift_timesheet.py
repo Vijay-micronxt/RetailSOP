@@ -32,32 +32,45 @@ class ShiftTimesheet(Document):
 		self._check_attendance_consistency()
 		self._check_overlap()
 
+	def _is_new_claim(self):
+		"""True for a brand-new entry, or a resubmission
+		(hr_api.resubmit_timesheet, flagged via self.flags.is_resubmission)
+		- the two cases where the employee is actually asserting a (first
+		or corrected) date/time claim that date-bounds/Attendance should
+		judge. False for every other save, notably action_timesheet()'s
+		own Open -> Approved/Rejected flip, which doesn't touch the claim
+		at all - re-checking those rules there would make the outcome
+		depend on how long the entry sat waiting for approval, not on
+		whether it was valid when it was actually filed.
+		"""
+		return self.is_new() or self.flags.get("is_resubmission")
+
 	def _lock_if_already_actioned(self):
 		"""Once a Supervisor/Manager has approved or rejected an entry
 		(hr_api.action_timesheet), nothing - including this doctype's own
 		API surface, Desk, or any future caller - should be able to edit
-		it further. Checked against the DB's current value rather than
+		it further, with one exception: hr_api.resubmit_timesheet flipping
+		a Rejected entry back to Open is the one allowed transition, so a
+		corrected resubmission doesn't have to be filed as a whole new
+		row. Checked against the DB's current value rather than
 		get_doc_before_save() so this doesn't depend on how/when Frappe
 		populates that cache; a plain read of "what's in the database
 		right now, before this save" is unambiguous. The Open ->
-		Approved/Rejected transition itself is unaffected: at the moment
-		action_timesheet() saves that change, the DB still has "Open".
+		Approved/Rejected transition itself is unaffected either: at the
+		moment action_timesheet() saves that change, the DB still has
+		"Open".
 		"""
 		if self.is_new():
 			return
 		current_status = frappe.db.get_value("Shift Timesheet", self.name, "status")
-		if current_status and current_status != "Open":
-			frappe.throw(_("This timesheet has already been actioned and can no longer be changed."))
+		if not current_status or current_status == "Open":
+			return
+		if current_status == "Rejected" and self.status == "Open":
+			return
+		frappe.throw(_("This timesheet has already been actioned and can no longer be changed."))
 
 	def _validate_date_bounds(self):
-		"""Only checked on insert (self.is_new()), never on a later save -
-		action_timesheet()'s own Open -> Approved/Rejected save would
-		otherwise get retroactively blocked by this same check once enough
-		real time has passed since submission for "today" to have moved
-		past the window, which has nothing to do with whether the entry
-		was valid when it was created.
-		"""
-		if not (self.is_new() and self.date):
+		if not (self._is_new_claim() and self.date):
 			return
 
 		today = getdate()
@@ -91,13 +104,12 @@ class ShiftTimesheet(Document):
 			)
 
 	def _check_attendance_consistency(self):
-		"""Only checked on insert, same reasoning as _validate_date_bounds -
-		an Attendance record submitted *after* this timesheet already
-		exists (Open) shouldn't retroactively block its later approval;
-		that would make the outcome depend on save ordering/timing rather
-		than on what was true when this entry was actually created.
+		"""Same _is_new_claim() scoping as _validate_date_bounds, and for
+		the same reason: an Attendance record submitted *after* this
+		timesheet already exists (Open) shouldn't retroactively block its
+		later approval just because it happened to land before that save.
 		"""
-		if not (self.is_new() and self.employee and self.date):
+		if not (self._is_new_claim() and self.employee and self.date):
 			return
 
 		attendance_status = frappe.db.get_value(

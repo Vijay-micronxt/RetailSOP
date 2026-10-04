@@ -851,6 +851,7 @@ Timesheet` doctype (§13.1). Two audiences:
 | `submit_timesheet(date, check_in, check_out, remarks=None)` | Inserts a `Shift Timesheet` (`status="Open"`) for the caller's own Employee. `hours_worked` and `outlet` are both computed/fetched server-side (`ShiftTimesheet.validate`/`fetch_from`), never trusted from the client. Same `validate()` call also enforces the overlap/length/lock/date-bound/Attendance rules in §13.1 — this isn't a separate check here |
 | `get_pending_timesheet_approvals()` | Every `status="Open"` timesheet, for any Food Court Supervisor or Manager to action — same flat model as leave |
 | `action_timesheet(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only. Throws if the actor's own Employee record is the timesheet's `employee` — see "Self-approval" below |
+| `resubmit_timesheet(name, date, check_in, check_out, remarks=None)` | Corrects and resubmits (`status` back to `Open`) a `Rejected` timesheet in place, rather than only being able to file a whole new entry. Caller's own Employee only, and only while `status="Rejected"` — `ShiftTimesheet.validate()` enforces the latter again regardless (§13.1) |
 | `get_employee_attendance_history(employee, from_date=None, to_date=None, page=1, page_size=20)` | Paginated `Attendance` history for **any one employee** (not just the caller's own), optionally bounded to `[from_date, to_date]` on `attendance_date`. Returns `{records, total, page, page_size}`; `page_size` capped at 100. Supervisor/Manager only |
 | `get_employee_leave_history(employee, from_date=None, to_date=None, page=1, page_size=20)` | Same shape as above, over `Leave Application`, bounded on `from_date`. Supervisor/Manager only |
 
@@ -925,29 +926,38 @@ time check, §5):
 - **An entry can no longer be edited once its `status` leaves `Open`**
   (checked against the DB's current value, not an in-memory cache, so
   it doesn't depend on exactly when Frappe populates
-  `get_doc_before_save()`). The `Open` → `Approved`/`Rejected`
-  transition `action_timesheet()` itself performs is unaffected — the
-  DB still reads `Open` at the moment that save runs.
+  `get_doc_before_save()`) — **with one exception**: `status` going
+  from `Rejected` back to `Open` is allowed, which is exactly what
+  `resubmit_timesheet()` does. `Approved` is never editable at all; a
+  `Rejected` entry saved without flipping to `Open` stays locked too
+  (the only move out of `Rejected` is a real resubmission). The
+  `Open` → `Approved`/`Rejected` transition `action_timesheet()`
+  performs is unaffected either way — the DB still reads `Open` at the
+  moment that save runs.
 - **`date` can't be in the future, or more than `MAX_BACKDATE_DAYS`
-  (14, another flagged assumption) in the past.** Only checked on
-  insert (`self.is_new()`), never on a later save — otherwise
-  `action_timesheet()`'s own approval save could get retroactively
-  blocked once enough real time has passed since submission for
-  "today" to have moved past the window, which has nothing to do with
-  whether the entry was valid when it was *created*.
+  (14, another flagged assumption) in the past.** Checked whenever an
+  entry is asserting a (first or corrected) date/time claim —
+  `self.is_new()`, **or** `self.flags.is_resubmission` set by
+  `resubmit_timesheet()` — never on a plain status-only save like
+  `action_timesheet()`'s. Otherwise either a long approval delay or an
+  untouched old date on a resubmitted entry could retroactively block
+  a save that has nothing to do with whether the date itself is valid.
 - **Blocked if `Attendance` for that employee/date is already
   `Absent` or `On Leave`** (submitted Attendance only,
   `docstatus=1`) — a full-day timesheet directly contradicts either.
   `Present`/`Half Day`/no Attendance record at all are all fine
-  (partial-day work is plausible on a Half Day). Same insert-only
-  scoping as the date check, for the same reason: an Attendance record
-  that changes *after* this timesheet was already submitted shouldn't
-  retroactively block its approval.
+  (partial-day work is plausible on a Half Day). Same `is_new()`-or-
+  `is_resubmission` scoping as the date check, for the same reason.
 
-Still deliberately **not addressed**: no resubmission/edit path for a
-`Rejected` entry short of filing a brand-new one (flagged in the
-original audit, kept out of scope — it's a UX/workflow addition, not a
-validation gap).
+A `Rejected` entry's history survives a resubmission — `track_changes:
+1` on this doctype means the original rejected values are still in its
+version history, not overwritten without a trace.
+
+Still deliberately **not addressed**: nothing currently surfaces *why*
+a timesheet (or leave application) was rejected — `action_timesheet`/
+`action_leave_application` take no rejection reason, so an employee
+resubmitting is going on the approver's own out-of-band communication,
+not anything stored on the record itself.
 
 **Not verified against a live bench** (same caveat as the Workflow/
 Notification fixtures in §10): `Attendance`'s mandatory fields,
