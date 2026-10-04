@@ -442,7 +442,7 @@ def get_my_timesheets():
 	return frappe.get_all(
 		"Shift Timesheet",
 		filters={"employee": employee},
-		fields=["name", "date", "check_in", "check_out", "hours_worked", "status", "remarks"],
+		fields=["name", "date", "outlet", "check_in", "check_out", "hours_worked", "status", "remarks"],
 		order_by="date desc",
 		ignore_permissions=True,
 	)
@@ -488,6 +488,7 @@ def get_pending_timesheet_approvals():
 			"name",
 			"employee",
 			"employee_name",
+			"outlet",
 			"date",
 			"check_in",
 			"check_out",

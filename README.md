@@ -848,7 +848,7 @@ Timesheet` doctype (§13.1). Two audiences:
 | `get_pending_leave_approvals()` | Every `status="Open"` leave application, for **any** Food Court Supervisor or Manager to action — see below for why this is flat |
 | `action_leave_application(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only. Throws if the actor's own Employee record is the application's `employee` — see "Self-approval" below |
 | `get_my_timesheets()` | The caller's own `Shift Timesheet` history |
-| `submit_timesheet(date, check_in, check_out, remarks=None)` | Inserts a `Shift Timesheet` (`status="Open"`) for the caller's own Employee. `hours_worked` is computed server-side (`ShiftTimesheet.validate`), never trusted from the client. Same `validate()` call also enforces the overlap/length/lock rules in §13.1 — this isn't a separate check here |
+| `submit_timesheet(date, check_in, check_out, remarks=None)` | Inserts a `Shift Timesheet` (`status="Open"`) for the caller's own Employee. `hours_worked` and `outlet` are both computed/fetched server-side (`ShiftTimesheet.validate`/`fetch_from`), never trusted from the client. Same `validate()` call also enforces the overlap/length/lock/date-bound/Attendance rules in §13.1 — this isn't a separate check here |
 | `get_pending_timesheet_approvals()` | Every `status="Open"` timesheet, for any Food Court Supervisor or Manager to action — same flat model as leave |
 | `action_timesheet(name, approve)` | Sets `status` to `Approved`/`Rejected`. Food Court Supervisor, Manager, or System Manager only. Throws if the actor's own Employee record is the timesheet's `employee` — see "Self-approval" below |
 | `get_employee_attendance_history(employee, from_date=None, to_date=None, page=1, page_size=20)` | Paginated `Attendance` history for **any one employee** (not just the caller's own), optionally bounded to `[from_date, to_date]` on `attendance_date`. Returns `{records, total, page, page_size}`; `page_size` capped at 100. Supervisor/Manager only |
@@ -890,7 +890,9 @@ doctype (not a fixture, ships like `Shift Checklist` does), deliberately
 *not* HRMS's real `Timesheet` (which is built around Task/Project time
 costing) and not `Employee Checkin` (which has no approval workflow).
 Fields: `employee` (Link), `employee_name` (fetched from
-`employee.employee_name`, for list display), `date`, `check_in`/
+`employee.employee_name`, for list display), `outlet` (Link → `Outlet`,
+read-only, fetched from `employee.outlet` the same way `employee_name`
+is — null for office/HQ employees with no outlet set), `date`, `check_in`/
 `check_out` (Time), `hours_worked` (Float, read-only — computed in
 `validate()` via `frappe.utils.time_diff_in_hours`, never accepted from
 the client), `status` (Select: `Open`/`Approved`/`Rejected`, default
@@ -926,14 +928,26 @@ time check, §5):
   `get_doc_before_save()`). The `Open` → `Approved`/`Rejected`
   transition `action_timesheet()` itself performs is unaffected — the
   DB still reads `Open` at the moment that save runs.
+- **`date` can't be in the future, or more than `MAX_BACKDATE_DAYS`
+  (14, another flagged assumption) in the past.** Only checked on
+  insert (`self.is_new()`), never on a later save — otherwise
+  `action_timesheet()`'s own approval save could get retroactively
+  blocked once enough real time has passed since submission for
+  "today" to have moved past the window, which has nothing to do with
+  whether the entry was valid when it was *created*.
+- **Blocked if `Attendance` for that employee/date is already
+  `Absent` or `On Leave`** (submitted Attendance only,
+  `docstatus=1`) — a full-day timesheet directly contradicts either.
+  `Present`/`Half Day`/no Attendance record at all are all fine
+  (partial-day work is plausible on a Half Day). Same insert-only
+  scoping as the date check, for the same reason: an Attendance record
+  that changes *after* this timesheet was already submitted shouldn't
+  retroactively block its approval.
 
-Deliberately **not yet addressed** (flagged during the same audit, kept
-out of this pass to stay focused): no bound on how far in the future/
-past `date` can be; no cross-check against that employee's `Attendance`/
-`Leave Application` for the same date (so a full-day timesheet and an
-"Absent" attendance record can coexist unflagged); no `outlet` captured
-on the entry; no resubmission/edit path for a `Rejected` entry short of
-filing a brand-new one.
+Still deliberately **not addressed**: no resubmission/edit path for a
+`Rejected` entry short of filing a brand-new one (flagged in the
+original audit, kept out of scope — it's a UX/workflow addition, not a
+validation gap).
 
 **Not verified against a live bench** (same caveat as the Workflow/
 Notification fixtures in §10): `Attendance`'s mandatory fields,
